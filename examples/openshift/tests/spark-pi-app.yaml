@@ -24,7 +24,7 @@ spec:
   image: ${SPARK_IMAGE}
   imagePullPolicy: IfNotPresent
   mainClass: org.apache.spark.examples.SparkPi
-  mainApplicationFile: local:///opt/spark/examples/jars/spark-examples_2.12-3.5.0.jar
+  mainApplicationFile: local:///opt/spark/examples/jars/spark-examples_2.12-3.5.7.jar
   arguments:
     - "1000"
   sparkVersion: "3.5.0"

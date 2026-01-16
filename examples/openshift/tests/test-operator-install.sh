@@ -14,7 +14,7 @@
 #
 # ============================================================================
 
-set -euo pipefail
+set -exuo pipefail
 
 # ============================================================================
 # Configuration
@@ -154,13 +154,7 @@ log "TEST 2: Checking jobNamespaces configuration..."
 
 # Get the --namespaces argument from the controller
 NAMESPACES_ARG=$(kubectl get pod "$CONTROLLER_POD" -n "$RELEASE_NAMESPACE" \
-    -o jsonpath='{.spec.containers[0].args}' | grep -oP '(?<=--namespaces=)[^"]*' || echo "")
-
-if [ -z "$NAMESPACES_ARG" ]; then
-    # Try getting from command instead of args
-    NAMESPACES_ARG=$(kubectl get pod "$CONTROLLER_POD" -n "$RELEASE_NAMESPACE" \
-        -o jsonpath='{.spec.containers[0].command}' | grep -oP '(?<=--namespaces=)[^"]*' || echo "")
-fi
+    -o jsonpath='{.spec.containers[0].args}' | jq -r '.[] | select(startswith("--namespaces="))')
 
 echo "  Configured namespaces: $NAMESPACES_ARG"
 

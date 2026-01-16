@@ -35,9 +35,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 APP_NAMESPACE="${APP_NAMESPACE:-docling-spark}"
 APP_NAME="${APP_NAME:-spark-pi}"
-TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-300}"  # 5 minutes is plenty for Pi
-SPARK_IMAGE="${SPARK_IMAGE:-docker.io/apache/spark:3.5.0}"
-
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-600}"  # 10 minutes should be enough to pull the image and run spark-pi
+SPARK_IMAGE="${SPARK_IMAGE:-quay.io/rishasin/docling-spark:latest}"
 # ============================================================================
 # Helper Functions
 # ============================================================================
