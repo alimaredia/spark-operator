@@ -24,6 +24,7 @@ on:
   pull_request:
     paths:
       - 'examples/openshift/**'
+      - 'config/**'
       - '.github/workflows/openshift-spark-pi-e2e.yaml'
   workflow_dispatch:
     inputs:
