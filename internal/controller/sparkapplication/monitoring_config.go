@@ -146,6 +146,9 @@ func buildPrometheusConfigMap(app *v1beta2.SparkApplication, prometheusConfigMap
 			Name:            prometheusConfigMapName,
 			Namespace:       app.Namespace,
 			OwnerReferences: []metav1.OwnerReference{util.GetOwnerReference(app)},
+			Labels: map[string]string{
+				common.LabelCreatedBySparkOperator: "true",
+			},
 		},
 		Data: configMapData,
 	}
