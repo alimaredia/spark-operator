@@ -1,0 +1,31 @@
+# .dockerignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+.venv/
+venv/
+.git/
+.gitignore
+.DS_Store
+
+# Data directories (now stored on PVCs, not in image)
+assets/
+output/
+
+# Logs and test artifacts
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+README.md
+*.md
+
+# Kubernetes manifests (not needed in image)
+k8s/

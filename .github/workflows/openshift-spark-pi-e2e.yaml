@@ -1,0 +1,96 @@
+# ============================================================================
+# OpenShift Spark Pi E2E Test (Lightweight)
+# ============================================================================
+#
+# This workflow runs lightweight E2E tests using the Spark Pi example.
+# It validates the Spark Operator installation and basic SparkApplication
+# functionality without requiring the heavy docling-spark image.
+#
+# Runs on: Default GitHub runner (ubuntu-latest)
+# Duration: ~5-10 minutes
+#
+# ============================================================================
+
+name: OpenShift Spark Pi E2E
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'examples/openshift/**'
+      - 'config/**'
+      - '.github/workflows/openshift-spark-pi-e2e.yaml'
+  pull_request:
+    paths:
+      - 'examples/openshift/**'
+      - 'config/**'
+      - '.github/workflows/openshift-spark-pi-e2e.yaml'
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Run with debug logging'
+        required: false
+        default: 'false'
+
+jobs:
+  spark-pi-e2e:
+    name: Spark Pi E2E Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # ======================================================================
+      # Step 1: Checkout code
+      # ======================================================================
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ======================================================================
+      # Step 2: Setup Kind cluster (using composite action)
+      # ======================================================================
+      - name: Setup Kind cluster
+        uses: ./.github/actions/kind-cluster-setup
+
+      # ======================================================================
+      # Step 3: Run operator install test (keep operator for Spark Pi test)
+      # ======================================================================
+      - name: Run operator install test
+        working-directory: examples/openshift/tests
+        run: |
+          echo "Running operator install test..."
+          chmod +x test-operator-install.sh
+          CLEANUP=false ./test-operator-install.sh
+
+      # ======================================================================
+      # Step 4: Run Spark Pi test
+      # ======================================================================
+      - name: Run Spark Pi test
+        working-directory: examples/openshift/tests
+        run: |
+          echo "Running Spark Pi test..."
+          chmod +x test-spark-pi.sh
+          ./test-spark-pi.sh
+
+      # Note: No explicit cleanup step needed - Kind cluster deletion handles it
+
+      # ======================================================================
+      # Debug: Show cluster state on failure
+      # ======================================================================
+      - name: Debug - Show cluster state
+        if: failure()
+        run: |
+          echo "=== Pods in all namespaces ==="
+          kubectl get pods -A
+          
+          echo ""
+          echo "=== SparkApplications ==="
+          kubectl get sparkapplications -A -o yaml 2>/dev/null || echo "No SparkApplications found"
+          
+          echo ""
+          echo "=== Events ==="
+          kubectl get events -A --sort-by='.lastTimestamp' | tail -50
+          
+          echo ""
+          echo "=== Operator logs ==="
+          kubectl logs -n spark-operator -l app.kubernetes.io/name=spark-operator --tail=100 2>/dev/null || echo "No operator logs"

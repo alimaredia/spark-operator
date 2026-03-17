@@ -2,6 +2,7 @@
 
 ![Version: 2.5.0-rc.0](https://img.shields.io/badge/Version-2.5.0--rc.0-informational?style=flat-square) ![AppVersion: 2.5.0-rc.0](https://img.shields.io/badge/AppVersion-2.5.0--rc.0-informational?style=flat-square)
 
+
 A Helm chart for Spark on Kubernetes operator.
 
 **Homepage:** <https://github.com/kubeflow/spark-operator>
@@ -125,7 +126,7 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | controller.affinity | object | `{}` | Affinity for controller pods. |
 | controller.tolerations | list | `[]` | List of node taints to tolerate for controller pods. |
 | controller.priorityClassName | string | `""` | Priority class for controller pods. |
-| controller.podSecurityContext | object | `{"fsGroup":185}` | Security context for controller pods. |
+| controller.podSecurityContext | object | `{"fsGroup":null}` | Security context for controller pods. |
 | controller.topologySpreadConstraints | list | `[]` | Topology spread constraints rely on node labels to identify the topology domain(s) that each Node is in. Ref: [Pod Topology Spread Constraints](https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/). The labelSelector field in topology spread constraint will be set to the selector labels for controller pods if not specified. |
 | controller.hostUsers | string | `nil` | Whether to use user namespace or not Kubernetes version 1.30 for feature beta (1.33 for GA) or higher is required with support from OS and OCI runtime ref: https://kubernetes.io/docs/concepts/workloads/pods/user-namespaces/ |
 | controller.env | list | `[]` | Environment variables for controller containers. |
@@ -168,7 +169,7 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | webhook.affinity | object | `{}` | Affinity for webhook pods. |
 | webhook.tolerations | list | `[]` | List of node taints to tolerate for webhook pods. |
 | webhook.priorityClassName | string | `""` | Priority class for webhook pods. |
-| webhook.podSecurityContext | object | `{"fsGroup":185}` | Security context for webhook pods. |
+| webhook.podSecurityContext | object | `{"fsGroup":null}` | Security context for webhook pods. |
 | webhook.topologySpreadConstraints | list | `[]` | Topology spread constraints rely on node labels to identify the topology domain(s) that each Node is in. Ref: [Pod Topology Spread Constraints](https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/). The labelSelector field in topology spread constraint will be set to the selector labels for webhook pods if not specified. |
 | webhook.hostUsers | string | `nil` | Whether to use user namespace or not Kubernetes version 1.30 for feature beta (1.33 for GA) or higher is required with support from OS and OCI runtime ref: https://kubernetes.io/docs/concepts/workloads/pods/user-namespaces/ |
 | webhook.env | list | `[]` | Environment variables for webhook containers. |

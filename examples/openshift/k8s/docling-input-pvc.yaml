@@ -1,0 +1,19 @@
+# PersistentVolumeClaim for Spark input data (PDFs)
+# IMPORTANT: Update namespace based on your deployment:
+#   - config/default/:        namespace=spark-operator
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: docling-input
+  namespace: spark-operator
+  labels:
+    app: docling-spark
+    purpose: spark-input
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: gp3-csi

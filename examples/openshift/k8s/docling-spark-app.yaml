@@ -1,0 +1,80 @@
+# Docling-Spark Application for OpenShift (PVC-based Storage)
+#
+# IMPORTANT: Update namespace and serviceAccount based on your deployment:
+#   - config/default/:        namespace=spark-operator, serviceAccount=spark-operator-spark
+# To ensure compatibility with OpenShift's default restricted-v2 Security Context Constraint (SCC), the explicit securityContext block (including runAsNonRoot, fsGroup, etc.) has been removed
+
+
+apiVersion: "sparkoperator.k8s.io/v1beta2"
+kind: SparkApplication
+metadata:
+  name: docling-spark-job
+  namespace: spark-operator
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: quay.io/rishasin/docling-spark:multi-output
+  imagePullPolicy: Always
+  timeToLiveSeconds: 300  # Pod cleanup delay (results persist on PVC)
+  mainApplicationFile: local:///app/scripts/run_spark_job.py
+  arguments:
+    - "--input-dir"
+    - "/app/assets"
+    - "--output-dir"
+    - "/app/output"
+  sparkVersion: "3.5.7"
+  restartPolicy:
+    type: Never
+
+  # ===============================================
+  # VOLUMES: PVC-based storage for input and output
+  # ===============================================
+  volumes:
+    - name: input-data
+      persistentVolumeClaim:
+        claimName: docling-input
+    - name: output-data
+      persistentVolumeClaim:
+        claimName: docling-output
+
+  driver:
+    cores: 1
+    coreLimit: "1200m"
+    memory: "4g"
+    labels:
+      version: 3.5.7
+    serviceAccount: spark-operator-spark
+    securityContext: {}
+    env:
+      - name: HOME
+        value: /tmp
+      - name: HF_HOME
+        value: /tmp/.cache/huggingface
+      - name: XDG_CACHE_HOME
+        value: /tmp/.cache
+    volumeMounts:
+      - name: input-data
+        mountPath: /app/assets
+        readOnly: true
+      - name: output-data
+        mountPath: /app/output
+
+  executor:
+    cores: 1
+    instances: 2
+    memory: "4g"
+    labels:
+      version: 3.5.7
+    securityContext: {}
+    env:
+      - name: HOME
+        value: /tmp
+      - name: HF_HOME
+        value: /tmp/.cache/huggingface
+      - name: XDG_CACHE_HOME
+        value: /tmp/.cache
+    volumeMounts:
+      - name: input-data
+        mountPath: /app/assets
+        readOnly: true

@@ -1,0 +1,72 @@
+# ============================================================================
+# OpenShift Cluster Setup - Composite Action
+# ============================================================================
+# Sets up a Kind cluster with Helm and kubectl for OpenShift E2E tests.
+#
+# Usage in workflow:
+#   - uses: ./.github/actions/kind-cluster-setup
+# ============================================================================
+
+name: 'OpenShift Cluster Setup'
+description: 'Setup Kind cluster with Helm and kubectl for OpenShift E2E tests'
+
+runs:
+  using: 'composite'
+  steps:
+    # ======================================================================
+    # Step 1: Set up Helm
+    # ======================================================================
+    - name: Set up Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'v3.14.0'
+
+    # ======================================================================
+    # Step 2: Install kubectl
+    # ======================================================================
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.32.0'
+
+    # ======================================================================
+    # Step 3: Fix kubectl version compatibility
+    # Intercepts internal calls to 'kubectl version --short' which fail in 1.28+
+    # ======================================================================
+    - name: Fix kubectl version compatibility
+      shell: bash
+      run: |
+        sudo mv $(which kubectl) /usr/local/bin/kubectl.real || true
+        echo '#!/bin/bash' | sudo tee /usr/local/bin/kubectl
+        echo 'args=("$@")' | sudo tee -a /usr/local/bin/kubectl
+        echo 'for i in "${!args[@]}"; do if [ "${args[$i]}" == "--short" ]; then unset "args[$i]"; fi; done' | sudo tee -a /usr/local/bin/kubectl
+        echo 'exec kubectl.real "${args[@]}"' | sudo tee -a /usr/local/bin/kubectl
+        sudo chmod +x /usr/local/bin/kubectl
+
+    # ======================================================================
+    # Step 4: Create Kind cluster
+    # ======================================================================
+    - name: Create Kind cluster
+      uses: helm/kind-action@v1
+      with:
+        cluster_name: spark-operator
+
+    # ======================================================================
+    # Step 5: Verify cluster is ready
+    # ======================================================================
+    - name: Verify cluster is ready
+      shell: bash
+      run: |
+        echo "Waiting for cluster to be ready..."
+        kubectl wait --for=condition=Ready nodes --all --timeout=120s
+        
+        echo ""
+        echo "Cluster nodes:"
+        kubectl get nodes -o wide
+        
+        echo ""
+        echo "Cluster info:"
+        kubectl cluster-info
+        
+        echo ""
+        echo "✅ Kind cluster is ready!"

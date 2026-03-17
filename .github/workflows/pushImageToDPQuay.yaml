@@ -1,0 +1,74 @@
+name: Build and Push Spark Image to Quay data-processing account
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Spark Image to build '
+        required: true
+        default: 'v4.0.1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.tag }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: quay.io
+  IMAGE_NAME: quay.io/opendatahub/data-processing
+  SPARK_TAG: ${{ github.event.inputs.tag }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to Quay.io
+        id: login
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME_OPENDATAHUB_DP }}
+          password: ${{ secrets.QUAY_PASSWORD_OPENDATAHUB_DP }}
+
+      - name: Build and push image to Quay.io
+        id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ./examples/openshift/tests/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ format('{0}:{1}', env.IMAGE_NAME, env.SPARK_TAG) }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inspect published image
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          SPARK_TAG: ${{ env.SPARK_TAG }}
+        run: |
+          docker buildx imagetools inspect ${IMAGE_NAME}:${SPARK_TAG}
+
+      - name: Output build information
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          SPARK_TAG: ${{ env.SPARK_TAG }}
+        run: |
+          echo "✅ Spark  container image built successfully!"
+          echo "📦 Image: ${IMAGE_NAME}:${SPARK_TAG}"
+          echo "🔗 Spark tag: ${SPARK_TAG}"
+          echo ""
+          echo "You can pull this image using:"
+          echo "docker pull ${IMAGE_NAME}:${SPARK_TAG}"
