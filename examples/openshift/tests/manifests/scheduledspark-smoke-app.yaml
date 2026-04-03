@@ -1,0 +1,24 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: ${SCHED_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "@every 1m"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulRunHistoryLimit: 1
+  failedRunHistoryLimit: 1
+  template:
+    type: Scala
+    mode: cluster
+    image: ${SPARK_IMAGE}
+    imagePullPolicy: IfNotPresent
+    mainClass: org.apache.spark.examples.SparkPi
+    mainApplicationFile: local:///opt/spark/examples/jars/spark-examples_2.12-3.5.7.jar
+    arguments: ["10"]
+    sparkVersion: "3.5.7"
+    restartPolicy: { type: Never }
+    driver: { cores: 1, memory: "512m", serviceAccount: spark-operator-spark, securityContext: {} }
+    executor: { cores: 1, instances: 1, memory: "512m", securityContext: {} }
+

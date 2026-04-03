@@ -17,6 +17,10 @@ export PATH := $(LOCALBIN):$(PATH)
 # Configuration
 KIND_CLUSTER_NAME ?= spark-operator
 CLEANUP ?= true
+NAMESPACE ?= spark-operator
+CONTROLLER_SA ?= spark-operator-controller
+SCHED_NAME ?= rbac-scheduled-smoke
+TIMEOUT_SECONDS ?= 180
 
 ##@ General
 
@@ -84,11 +88,32 @@ e2e-kustomize-test: ## Run Go e2e tests using Kustomize manifests for operator i
 	@echo "Running Go e2e tests with Kustomize installation..."
 	cd $(REPO_ROOT) && INSTALL_METHOD=kustomize go test ./examples/openshift/tests/e2e/ -v -ginkgo.v -timeout 30m
 
+.PHONY: scheduledspark-rbac-check
+scheduledspark-rbac-check: ## RBAC preflight for ScheduledSparkApplication.
+	@echo "Running RBAC preflight for ScheduledSparkApplication..."
+	chmod +x $(TESTS_DIR)/check-scheduledspark-rbac.sh
+	NAMESPACE=$(NAMESPACE) CONTROLLER_SA=$(CONTROLLER_SA) \
+		$(TESTS_DIR)/check-scheduledspark-rbac.sh
+
+.PHONY: scheduledspark-smoke
+scheduledspark-smoke: ## ScheduledSparkApplication smoke test.
+	@echo "Running ScheduledSparkApplication smoke test..."
+	chmod +x $(TESTS_DIR)/test-scheduledspark-smoke.sh
+	NAMESPACE=$(NAMESPACE) SCHED_NAME=$(SCHED_NAME) TIMEOUT_SECONDS=$(TIMEOUT_SECONDS) \
+		$(TESTS_DIR)/test-scheduledspark-smoke.sh
+
+.PHONY: scheduledspark-verify
+scheduledspark-verify: ## RBAC + ScheduledSparkApplication combined verification.
+	$(MAKE) scheduledspark-rbac-check
+	$(MAKE) scheduledspark-smoke
+
 .PHONY: test-all
-test-all: ## Run all tests (operator-install, spark-pi, docling).
+test-all: ## Run all tests (operator-install, spark-pi, docling, scheduledspark).
 	@echo "Running all OpenShift/KIND tests..."
 	$(MAKE) operator-install CLEANUP=false
 	$(MAKE) test-spark-pi CLEANUP=false
+	$(MAKE) test-docling-spark CLEANUP=false
+	$(MAKE) scheduledspark-verify CLEANUP=false
 	$(MAKE) test-docling-spark
 
 ##@ Image Build/Load (CI and local)

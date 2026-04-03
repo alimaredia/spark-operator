@@ -106,7 +106,7 @@ echo "  Image:     $SPARK_IMAGE"
 kubectl delete sparkapplication "$APP_NAME" -n "$APP_NAMESPACE" --ignore-not-found 2>/dev/null || true
 
 # Apply the SparkApplication from YAML file (using envsubst for variable substitution)
-APP_YAML="${APP_YAML:-$SCRIPT_DIR/spark-pi-app.yaml}"
+APP_YAML="${APP_YAML:-$SCRIPT_DIR/manifests/spark-pi-app.yaml}"
 if [ ! -f "$APP_YAML" ]; then
     fail "SparkApplication YAML not found: $APP_YAML"
 fi
