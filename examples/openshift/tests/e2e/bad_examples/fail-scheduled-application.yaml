@@ -1,0 +1,27 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: spark-pi-scheduled-fail
+  namespace: spark-operator
+spec:
+  schedule: "@every 1m"
+  concurrencyPolicy: Allow
+  failedRunHistoryLimit: 1
+  template:
+    type: Scala
+    mode: cluster
+    image: docker.io/library/spark:4.0.1
+    imagePullPolicy: IfNotPresent
+    mainClass: non-existent
+    mainApplicationFile: local:///non-existent.jar
+    sparkVersion: 4.0.1
+    restartPolicy:
+      type: Never
+    driver:
+      cores: 1
+      memory: 512m
+      serviceAccount: spark-operator-spark
+    executor:
+      instances: 1
+      cores: 1
+      memory: 512m

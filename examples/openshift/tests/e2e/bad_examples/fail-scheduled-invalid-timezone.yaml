@@ -1,0 +1,27 @@
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: ScheduledSparkApplication
+metadata:
+  name: spark-pi-scheduled-bad-tz
+  namespace: spark-operator
+spec:
+  schedule: "@every 1m"
+  timeZone: "Not/A/Timezone"
+  concurrencyPolicy: Allow
+  template:
+    type: Scala
+    mode: cluster
+    image: docker.io/library/spark:4.0.1
+    imagePullPolicy: IfNotPresent
+    mainClass: org.apache.spark.examples.SparkPi
+    mainApplicationFile: local:///opt/spark/examples/jars/spark-examples.jar
+    sparkVersion: 4.0.1
+    restartPolicy:
+      type: Never
+    driver:
+      cores: 1
+      memory: 512m
+      serviceAccount: spark-operator-spark
+    executor:
+      instances: 1
+      cores: 1
+      memory: 512m

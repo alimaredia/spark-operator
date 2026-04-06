@@ -151,6 +151,20 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = AfterSuite(func() {
+	// Always restore params.env if it was overridden, regardless of CLEANUP,
+	// so the repo checkout is not left dirty.
+	if origParamsEnv != nil {
+		kustomizeDir := filepath.Join(repoRoot, "config", "default")
+		paramsEnvPath := filepath.Join(kustomizeDir, "params.env")
+		Expect(os.WriteFile(paramsEnvPath, origParamsEnv, 0644)).NotTo(HaveOccurred())
+	}
+
+	cleanup := os.Getenv("CLEANUP")
+	if strings.EqualFold(cleanup, "false") {
+		logf.Log.Info("CLEANUP=false, skipping uninstall and teardown")
+		return
+	}
+
 	switch installMethod {
 	case InstallMethodKustomize:
 		uninstallKustomize()
@@ -249,11 +263,6 @@ func uninstallKustomize() {
 	output, err := runCommand("kubectl", "delete", "-k", kustomizeDir, "--ignore-not-found=true")
 	logf.Log.Info("kubectl delete -k output", "output", output)
 	Expect(err).NotTo(HaveOccurred(), "Failed to delete kustomize manifests: %s", output)
-
-	if origParamsEnv != nil {
-		paramsEnvPath := filepath.Join(kustomizeDir, "params.env")
-		Expect(os.WriteFile(paramsEnvPath, origParamsEnv, 0644)).NotTo(HaveOccurred())
-	}
 }
 
 func overrideParamsEnvImage(kustomizeDir, image string) {
