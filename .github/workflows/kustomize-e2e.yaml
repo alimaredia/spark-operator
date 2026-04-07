@@ -69,6 +69,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Build and load image to Kind cluster
+        run: |
+          sudo apt-get install -y podman
+          podman pull quay.io/aipcc/base-images/cpu:3.4.0-1773328752
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
