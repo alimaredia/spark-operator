@@ -69,10 +69,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Build and load image to Kind cluster
+      - name: Podman pull something
         run: |
           sudo apt-get install -y podman
-          podman pull quay.io/aipcc/base-images/cpu:3.4.0-1773328752
+          podman pull quay.io/opendatahub/spark-operator:v2.4.0-odh-3.4.0-GA
 
       - name: Set up Go
         uses: actions/setup-go@v6
