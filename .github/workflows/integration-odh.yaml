@@ -40,7 +40,8 @@ jobs:
   run:
     strategy:
       matrix:
-        arch: [amd64, arm64] 
+        # Only run amd64 on push (image not built for arm64), allow both on manual trigger
+        arch: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["amd64", "arm64"]') || fromJSON('["amd64"]') }}
     uses: ./.github/workflows/_run-kustomize-e2e.yaml
     secrets: inherit
     with:
