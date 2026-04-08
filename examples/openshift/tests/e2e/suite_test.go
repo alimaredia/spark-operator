@@ -67,8 +67,9 @@ const (
 	PollInterval = 1 * time.Second
 	WaitTimeout  = 5 * time.Minute
 
-	InstallMethodHelm      = "helm"
-	InstallMethodKustomize = "kustomize"
+	InstallMethodHelm         = "helm"
+	InstallMethodKustomize    = "kustomize"
+	InstallMethodPreinstalled = "preinstalled"
 )
 
 var (
@@ -130,13 +131,17 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(clientset).NotTo(BeNil())
 
-	By("Creating release namespace")
+	By("Ensuring release namespace exists")
 	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ReleaseNamespace}}
-	Expect(k8sClient.Create(context.TODO(), namespace)).NotTo(HaveOccurred())
+	if err := k8sClient.Create(context.TODO(), namespace); err != nil {
+		logf.Log.Info("Namespace already exists or could not be created", "namespace", ReleaseNamespace, "error", err)
+	}
 
 	switch installMethod {
 	case InstallMethodKustomize:
 		installWithKustomize()
+	case InstallMethodPreinstalled:
+		logf.Log.Info("Operator already installed, skipping install")
 	default:
 		installWithHelm()
 	}
@@ -169,6 +174,8 @@ var _ = AfterSuite(func() {
 	case InstallMethodKustomize:
 		uninstallKustomize()
 		// kubectl delete -k already removes the namespace, so skip explicit deletion.
+	case InstallMethodPreinstalled:
+		logf.Log.Info("Operator was preinstalled, skipping uninstall")
 	default:
 		uninstallHelm()
 
