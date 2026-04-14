@@ -1,0 +1,24 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+
+flags:
+  unit:
+    paths:
+      - "!test/e2e/"
+      - "!examples/openshift/tests/e2e/"
+  e2e-kustomize:
+    paths:
+      - "!test/e2e/"
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+

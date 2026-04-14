@@ -85,6 +85,14 @@ jobs:
         env:
           SPARK_OPERATOR_IMAGE: ghcr.io/kubeflow/spark-operator/controller:local
 
+      - name: Upload e2e coverage to Codecov
+        if: always() && github.event_name == 'push'
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
+        with:
+          files: cover-e2e-kustomize.out
+          flags: e2e-kustomize
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Debug - Show cluster state
         if: failure()
         run: |

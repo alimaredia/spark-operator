@@ -86,7 +86,7 @@ test-docling-spark: ## Run Docling Spark test on KIND or OpenShift.
 .PHONY: e2e-kustomize-test
 e2e-kustomize-test: ## Run Go e2e tests using Kustomize manifests for operator installation.
 	@echo "Running Go e2e tests with Kustomize installation..."
-	cd $(REPO_ROOT) && INSTALL_METHOD=kustomize go test ./examples/openshift/tests/e2e/ -v -ginkgo.v -timeout 30m
+	cd $(REPO_ROOT) && INSTALL_METHOD=kustomize go test ./examples/openshift/tests/e2e/ -v -ginkgo.v -timeout 30m -coverprofile cover-e2e-kustomize.out
 
 .PHONY: scheduledspark-rbac-check
 scheduledspark-rbac-check: ## RBAC preflight for ScheduledSparkApplication.
