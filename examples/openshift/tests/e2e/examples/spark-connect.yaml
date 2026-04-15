@@ -17,7 +17,7 @@ apiVersion: sparkoperator.k8s.io/v1alpha1
 kind: SparkConnect
 metadata:
   name: spark-connect
-  namespace: spark-operator
+  namespace: spark-test
 spec:
   sparkVersion: 4.0.1
   server:

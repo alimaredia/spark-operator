@@ -17,7 +17,7 @@ apiVersion: sparkoperator.k8s.io/v1beta2
 kind: SparkApplication
 metadata:
   name: fail-submission
-  namespace: spark-operator
+  namespace: spark-test
 spec:
   type: Scala
   mode: cluster

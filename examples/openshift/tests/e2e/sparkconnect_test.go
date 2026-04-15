@@ -36,6 +36,11 @@ var _ = Describe("SparkConnect Controller", func() {
 
 				conn = &v1alpha1.SparkConnect{}
 				Expect(decoder.Decode(conn)).NotTo(HaveOccurred())
+
+				// Ensure namespace is set to test namespace if not specified in YAML
+				if conn.Namespace == "" {
+					conn.Namespace = TestNamespace
+				}
 			})
 
 			By("Creating SparkConnect", func() {

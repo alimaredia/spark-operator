@@ -37,6 +37,8 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -60,6 +62,7 @@ import (
 const (
 	ReleaseName      = "spark-operator"
 	ReleaseNamespace = "spark-operator"
+	TestNamespace    = "spark-test"
 
 	MutatingWebhookName   = "spark-operator-webhook"
 	ValidatingWebhookName = "spark-operator-webhook"
@@ -67,8 +70,9 @@ const (
 	PollInterval = 1 * time.Second
 	WaitTimeout  = 5 * time.Minute
 
-	InstallMethodHelm      = "helm"
-	InstallMethodKustomize = "kustomize"
+	InstallMethodHelm         = "helm"
+	InstallMethodKustomize    = "kustomize"
+	InstallMethodPreinstalled = "preinstalled"
 )
 
 var (
@@ -130,13 +134,43 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(clientset).NotTo(BeNil())
 
-	By("Creating release namespace")
-	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ReleaseNamespace}}
-	Expect(k8sClient.Create(context.TODO(), namespace)).NotTo(HaveOccurred())
+	// Only manage operator namespace if not preinstalled
+	if installMethod != InstallMethodPreinstalled {
+		By("Ensuring clean state for release namespace")
+		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ReleaseNamespace}}
+		existingNs := &corev1.Namespace{}
+		err = k8sClient.Get(context.TODO(), types.NamespacedName{Name: ReleaseNamespace}, existingNs)
+
+		if err == nil {
+			// Namespace exists from previous run, delete it to ensure clean state
+			By(fmt.Sprintf("Namespace %s already exists, deleting stale namespace", ReleaseNamespace))
+			Expect(k8sClient.Delete(context.TODO(), existingNs)).NotTo(HaveOccurred())
+
+			By("Waiting for namespace to be fully deleted")
+			Eventually(func() bool {
+				err := k8sClient.Get(context.TODO(), types.NamespacedName{Name: ReleaseNamespace}, &corev1.Namespace{})
+				return apierrors.IsNotFound(err)
+			}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(BeTrue())
+
+			By("Creating fresh namespace")
+			Expect(k8sClient.Create(context.TODO(), namespace)).NotTo(HaveOccurred())
+		} else if apierrors.IsNotFound(err) {
+			// Namespace doesn't exist, create it
+			By("Creating release namespace")
+			Expect(k8sClient.Create(context.TODO(), namespace)).NotTo(HaveOccurred())
+		} else {
+			// Other error
+			Expect(err).NotTo(HaveOccurred(), "Failed to check namespace existence")
+		}
+	} else {
+		logf.Log.Info("Operator is preinstalled, skipping operator namespace management", "namespace", ReleaseNamespace)
+	}
 
 	switch installMethod {
 	case InstallMethodKustomize:
 		installWithKustomize()
+	case InstallMethodPreinstalled:
+		logf.Log.Info("Operator already installed, skipping install")
 	default:
 		installWithHelm()
 	}
@@ -148,19 +182,120 @@ var _ = BeforeSuite(func() {
 	Expect(waitForValidatingWebhookReady(context.Background(), validatingWebhookKey)).NotTo(HaveOccurred())
 	// TODO: Remove this when there is a better way to ensure the webhooks are ready before running the e2e tests.
 	time.Sleep(10 * time.Second)
+
+	By("Ensuring clean state for test namespace")
+	testNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: TestNamespace}}
+	existingTestNs := &corev1.Namespace{}
+	err = k8sClient.Get(context.TODO(), types.NamespacedName{Name: TestNamespace}, existingTestNs)
+
+	if err == nil {
+		// Test namespace exists from previous run, delete it to ensure clean state
+		By(fmt.Sprintf("Test namespace %s already exists, deleting stale namespace", TestNamespace))
+		Expect(k8sClient.Delete(context.TODO(), existingTestNs)).NotTo(HaveOccurred())
+
+		By("Waiting for test namespace to be fully deleted")
+		Eventually(func() bool {
+			err := k8sClient.Get(context.TODO(), types.NamespacedName{Name: TestNamespace}, &corev1.Namespace{})
+			return apierrors.IsNotFound(err)
+		}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(BeTrue())
+
+		By("Creating fresh test namespace")
+		Expect(k8sClient.Create(context.TODO(), testNamespace)).NotTo(HaveOccurred())
+	} else if apierrors.IsNotFound(err) {
+		// Test namespace doesn't exist, create it
+		By("Creating test namespace")
+		Expect(k8sClient.Create(context.TODO(), testNamespace)).NotTo(HaveOccurred())
+	} else {
+		// Other error
+		Expect(err).NotTo(HaveOccurred(), "Failed to check test namespace existence")
+	}
+
+	By("Creating Spark service account and RBAC in test namespace")
+	sparkServiceAccount := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "spark-operator-spark",
+			Namespace: TestNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "spark-operator",
+				"app.kubernetes.io/instance":  "spark-operator",
+				"app.kubernetes.io/component": "spark",
+			},
+		},
+		AutomountServiceAccountToken: ptr.To(true),
+	}
+	Expect(k8sClient.Create(context.TODO(), sparkServiceAccount)).NotTo(HaveOccurred())
+
+	sparkRole := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "spark-operator-role",
+			Namespace: TestNamespace,
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods", "configmaps", "persistentvolumeclaims", "services"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"},
+			},
+		},
+	}
+	Expect(k8sClient.Create(context.TODO(), sparkRole)).NotTo(HaveOccurred())
+
+	sparkRoleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "spark-operator-rolebinding",
+			Namespace: TestNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "spark-operator",
+				"app.kubernetes.io/instance":  "spark-operator",
+				"app.kubernetes.io/component": "spark",
+			},
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      "spark-operator-spark",
+				Namespace: TestNamespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			Kind:     "Role",
+			Name:     "spark-operator-role",
+			APIGroup: "rbac.authorization.k8s.io",
+		},
+	}
+	Expect(k8sClient.Create(context.TODO(), sparkRoleBinding)).NotTo(HaveOccurred())
 })
 
 var _ = AfterSuite(func() {
-	switch installMethod {
-	case InstallMethodKustomize:
-		uninstallKustomize()
-		// kubectl delete -k already removes the namespace, so skip explicit deletion.
-	default:
-		uninstallHelm()
+	// Always restore params.env if it was overridden, regardless of CLEANUP,
+	// so the repo checkout is not left dirty.
+	if origParamsEnv != nil {
+		kustomizeDir := filepath.Join(repoRoot, "config", "default")
+		paramsEnvPath := filepath.Join(kustomizeDir, "params.env")
+		Expect(os.WriteFile(paramsEnvPath, origParamsEnv, 0644)).NotTo(HaveOccurred())
+	}
 
-		By("Deleting release namespace")
-		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ReleaseNamespace}}
-		Expect(k8sClient.Delete(context.TODO(), namespace)).NotTo(HaveOccurred())
+	cleanup := os.Getenv("CLEANUP")
+	if strings.EqualFold(cleanup, "false") {
+		logf.Log.Info("CLEANUP=false, skipping uninstall")
+	} else {
+		By("Deleting test namespace")
+		testNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: TestNamespace}}
+		Expect(k8sClient.Delete(context.TODO(), testNamespace)).NotTo(HaveOccurred())
+
+		switch installMethod {
+		case InstallMethodKustomize:
+			uninstallKustomize()
+			// kubectl delete -k already removes the namespace, so skip explicit deletion.
+		case InstallMethodPreinstalled:
+			logf.Log.Info("Operator was preinstalled, skipping uninstall")
+		default:
+			uninstallHelm()
+
+			By("Deleting release namespace")
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ReleaseNamespace}}
+			Expect(k8sClient.Delete(context.TODO(), namespace)).NotTo(HaveOccurred())
+		}
 	}
 
 	By("Tearing down the test environment")
@@ -249,11 +384,6 @@ func uninstallKustomize() {
 	output, err := runCommand("kubectl", "delete", "-k", kustomizeDir, "--ignore-not-found=true")
 	logf.Log.Info("kubectl delete -k output", "output", output)
 	Expect(err).NotTo(HaveOccurred(), "Failed to delete kustomize manifests: %s", output)
-
-	if origParamsEnv != nil {
-		paramsEnvPath := filepath.Join(kustomizeDir, "params.env")
-		Expect(os.WriteFile(paramsEnvPath, origParamsEnv, 0644)).NotTo(HaveOccurred())
-	}
 }
 
 func overrideParamsEnvImage(kustomizeDir, image string) {
