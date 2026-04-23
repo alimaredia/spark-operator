@@ -57,6 +57,11 @@ var _ = Describe("Example SparkApplication", func() {
 			Expect(decoder).NotTo(BeNil())
 			Expect(decoder.Decode(app)).NotTo(HaveOccurred())
 
+			// Ensure namespace is set to test namespace if not specified in YAML
+			if app.Namespace == "" {
+				app.Namespace = TestNamespace
+			}
+
 			By("Creating SparkApplication")
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		})
@@ -196,6 +201,11 @@ var _ = Describe("Example SparkApplication", func() {
 			Expect(decoder).NotTo(BeNil())
 			Expect(decoder.Decode(app)).NotTo(HaveOccurred())
 
+			// Ensure namespace is set to test namespace if not specified in YAML
+			if app.Namespace == "" {
+				app.Namespace = TestNamespace
+			}
+
 			By("Creating SparkApplication")
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		})
@@ -255,6 +265,11 @@ var _ = Describe("Example SparkApplication", func() {
 			Expect(decoder).NotTo(BeNil())
 			Expect(decoder.Decode(app)).NotTo(HaveOccurred())
 
+			// Ensure namespace is set to test namespace if not specified in YAML
+			if app.Namespace == "" {
+				app.Namespace = TestNamespace
+			}
+
 			By("Creating SparkApplication")
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		})
@@ -310,6 +325,11 @@ var _ = Describe("Example SparkApplication", func() {
 			decoder := yaml.NewYAMLOrJSONDecoder(file, 100)
 			Expect(decoder).NotTo(BeNil())
 			Expect(decoder.Decode(app)).NotTo(HaveOccurred())
+
+			// Ensure namespace is set to test namespace if not specified in YAML
+			if app.Namespace == "" {
+				app.Namespace = TestNamespace
+			}
 
 			By("Creating SparkApplication")
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
@@ -371,6 +391,11 @@ var _ = Describe("Example SparkApplication", func() {
 			Expect(decoder).NotTo(BeNil())
 			Expect(decoder.Decode(app)).NotTo(HaveOccurred())
 
+			// Ensure namespace is set to test namespace if not specified in YAML
+			if app.Namespace == "" {
+				app.Namespace = TestNamespace
+			}
+
 			By("Creating SparkApplication")
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		})
@@ -411,6 +436,11 @@ var _ = Describe("Example SparkApplication", func() {
 			decoder := yaml.NewYAMLOrJSONDecoder(file, 100)
 			Expect(decoder).NotTo(BeNil())
 			Expect(decoder.Decode(app)).NotTo(HaveOccurred())
+
+			// Ensure namespace is set to test namespace if not specified in YAML
+			if app.Namespace == "" {
+				app.Namespace = TestNamespace
+			}
 
 			By("Creating SparkApplication")
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
