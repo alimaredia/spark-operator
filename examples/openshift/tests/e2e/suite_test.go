@@ -210,60 +210,51 @@ var _ = BeforeSuite(func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to check test namespace existence")
 	}
 
-	By("Creating Spark service account and RBAC in test namespace")
-	sparkServiceAccount := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "spark-operator-spark",
-			Namespace: TestNamespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "spark-operator",
-				"app.kubernetes.io/instance":  "spark-operator",
-				"app.kubernetes.io/component": "spark",
-			},
-		},
-		AutomountServiceAccountToken: ptr.To(true),
-	}
-	Expect(k8sClient.Create(context.TODO(), sparkServiceAccount)).NotTo(HaveOccurred())
+	By("Copying Spark service account and RBAC from operator namespace to test namespace")
+	srcSA := &corev1.ServiceAccount{}
+	Expect(k8sClient.Get(context.TODO(), types.NamespacedName{
+		Name: "spark-operator-spark", Namespace: ReleaseNamespace,
+	}, srcSA)).NotTo(HaveOccurred(), "Failed to get spark ServiceAccount from operator namespace %s", ReleaseNamespace)
+	srcSA.Namespace = TestNamespace
+	srcSA.ResourceVersion = ""
+	srcSA.UID = ""
+	srcSA.CreationTimestamp = metav1.Time{}
+	srcSA.OwnerReferences = nil
+	srcSA.Finalizers = nil
+	srcSA.ManagedFields = nil
+	srcSA.Secrets = nil
+	Expect(k8sClient.Create(context.TODO(), srcSA)).NotTo(HaveOccurred())
 
-	sparkRole := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "spark-operator-role",
-			Namespace: TestNamespace,
-		},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{""},
-				Resources: []string{"pods", "configmaps", "persistentvolumeclaims", "services"},
-				Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"},
-			},
-		},
-	}
-	Expect(k8sClient.Create(context.TODO(), sparkRole)).NotTo(HaveOccurred())
+	srcRole := &rbacv1.Role{}
+	Expect(k8sClient.Get(context.TODO(), types.NamespacedName{
+		Name: "spark-operator-role", Namespace: ReleaseNamespace,
+	}, srcRole)).NotTo(HaveOccurred(), "Failed to get spark Role from operator namespace %s", ReleaseNamespace)
+	srcRole.Namespace = TestNamespace
+	srcRole.ResourceVersion = ""
+	srcRole.UID = ""
+	srcRole.CreationTimestamp = metav1.Time{}
+	srcRole.OwnerReferences = nil
+	srcRole.Finalizers = nil
+	srcRole.ManagedFields = nil
+	Expect(k8sClient.Create(context.TODO(), srcRole)).NotTo(HaveOccurred())
 
-	sparkRoleBinding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "spark-operator-rolebinding",
-			Namespace: TestNamespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "spark-operator",
-				"app.kubernetes.io/instance":  "spark-operator",
-				"app.kubernetes.io/component": "spark",
-			},
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      "spark-operator-spark",
-				Namespace: TestNamespace,
-			},
-		},
-		RoleRef: rbacv1.RoleRef{
-			Kind:     "Role",
-			Name:     "spark-operator-role",
-			APIGroup: "rbac.authorization.k8s.io",
-		},
+	srcRB := &rbacv1.RoleBinding{}
+	Expect(k8sClient.Get(context.TODO(), types.NamespacedName{
+		Name: "spark-operator-rolebinding", Namespace: ReleaseNamespace,
+	}, srcRB)).NotTo(HaveOccurred(), "Failed to get spark RoleBinding from operator namespace %s", ReleaseNamespace)
+	srcRB.Namespace = TestNamespace
+	srcRB.ResourceVersion = ""
+	srcRB.UID = ""
+	srcRB.CreationTimestamp = metav1.Time{}
+	srcRB.OwnerReferences = nil
+	srcRB.Finalizers = nil
+	srcRB.ManagedFields = nil
+	for i := range srcRB.Subjects {
+		if srcRB.Subjects[i].Kind == "ServiceAccount" {
+			srcRB.Subjects[i].Namespace = TestNamespace
+		}
 	}
-	Expect(k8sClient.Create(context.TODO(), sparkRoleBinding)).NotTo(HaveOccurred())
+	Expect(k8sClient.Create(context.TODO(), srcRB)).NotTo(HaveOccurred())
 })
 
 var _ = AfterSuite(func() {
