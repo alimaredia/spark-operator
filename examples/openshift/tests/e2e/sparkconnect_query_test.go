@@ -10,10 +10,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1alpha1"
 	"github.com/kubeflow/spark-operator/v2/internal/controller/sparkconnect"
@@ -23,7 +25,7 @@ import (
 var _ = Describe("SparkConnect Query", func() {
 	Context("Execute a query via Spark Connect", func() {
 		ctx := context.Background()
-		path := filepath.Join("examples", "spark-connect-python.yaml")
+		path := filepath.Join("examples", "spark-connect.yaml")
 
 		var conn *v1alpha1.SparkConnect
 
@@ -39,6 +41,9 @@ var _ = Describe("SparkConnect Query", func() {
 			conn = &v1alpha1.SparkConnect{}
 			Expect(decoder.Decode(conn)).NotTo(HaveOccurred())
 			conn.Name = "spark-connect-query"
+			if conn.Namespace == "" {
+				conn.Namespace = TestNamespace
+			}
 
 			By("Creating SparkConnect")
 			Expect(k8sClient.Create(ctx, conn)).To(Succeed())
@@ -116,7 +121,37 @@ var _ = Describe("SparkConnect Query", func() {
 			}
 			Expect(hasConnectPort).To(BeTrue(), "service should expose spark-connect-server port 15002")
 
-			By("Installing PySpark Connect dependencies")
+			By("Creating PySpark client pod")
+			clientPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "pyspark-client-",
+					Namespace:    conn.Namespace,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:    "pyspark-client",
+							Image:   "quay.io/fedora/python-312:latest",
+							Command: []string{"sleep", "infinity"},
+						},
+					},
+					RestartPolicy: corev1.RestartPolicyNever,
+				},
+			}
+			Expect(controllerutil.SetOwnerReference(conn, clientPod, k8sClient.Scheme())).To(Succeed())
+			Expect(k8sClient.Create(ctx, clientPod)).To(Succeed())
+
+			By("Waiting for PySpark client pod to be ready")
+			Eventually(func() bool {
+				key := types.NamespacedName{Namespace: conn.Namespace, Name: clientPod.Name}
+				pod := &corev1.Pod{}
+				if err := k8sClient.Get(ctx, key, pod); err != nil {
+					return false
+				}
+				return util.IsPodReady(pod)
+			}).WithPolling(PollInterval).WithTimeout(WaitTimeout).Should(BeTrue())
+
+			By("Installing PySpark Connect client")
 			output, err := runCommand(
 				"kubectl", "exec", "-n", conn.Namespace, serverPodName, "--",
 				"bash", "-c", "export HOME=/tmp && pip install --quiet --disable-pip-version-check pandas pyarrow grpcio grpcio-status",
@@ -130,6 +165,8 @@ var _ = Describe("SparkConnect Query", func() {
 					`spark = SparkSession.builder.remote("%s").getOrCreate(); `+
 					`df = spark.range(100).selectExpr("id", "id * 2 as doubled"); `+
 					`print("ROW_COUNT=" + str(df.count())); `+
+					`row = df.filter("id = 7").collect()[0]; `+
+					`print("VALIDATE=" + str(row["doubled"])); `+
 					`spark.stop()`,
 				connectURL,
 			)
@@ -144,6 +181,8 @@ var _ = Describe("SparkConnect Query", func() {
 			Expect(err).NotTo(HaveOccurred(), "PySpark query failed: %s", output)
 			Expect(output).To(ContainSubstring("ROW_COUNT=100"),
 				"expected query to return 100 rows, got: %s", output)
+			Expect(output).To(ContainSubstring("VALIDATE=14"),
+				"expected doubled value of 14 for id=7, got: %s", output)
 		})
 	})
 })
