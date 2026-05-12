@@ -17,9 +17,11 @@ apiVersion: sparkoperator.k8s.io/v1alpha1
 kind: SparkConnect
 metadata:
   name: spark-connect
-  namespace: default
+  namespace: redhat-ods-applications
 spec:
   sparkVersion: 4.0.1
+  sparkConf:
+    spark.driver.blockManager.port: "7080"
   server:
     template:
       metadata:
@@ -32,7 +34,7 @@ spec:
       spec:
         containers:
         - name: spark-kubernetes-driver
-          image: docker.io/library/spark:4.0.1
+          image: quay.io/opendatahub/data-processing:Spark-v4.0.1
           imagePullPolicy: Always
           resources:
             requests:
@@ -46,8 +48,6 @@ spec:
           capabilities:
             drop:
             - ALL
-          runAsGroup: 185
-          runAsUser: 185
           runAsNonRoot: true
           allowPrivilegeEscalation: false
           seccompProfile:
@@ -67,14 +67,12 @@ spec:
       spec:
         containers:
         - name: spark-kubernetes-executor
-          image: docker.io/library/spark:4.0.1
+          image: quay.io/opendatahub/data-processing:Spark-v4.0.1
           imagePullPolicy: Always
         securityContext:
           capabilities:
             drop:
             - ALL
-          runAsGroup: 185
-          runAsUser: 185
           runAsNonRoot: true
           allowPrivilegeEscalation: false
           seccompProfile:

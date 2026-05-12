@@ -176,7 +176,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, options controller.Optio
 // +kubebuilder:rbac:groups=,resources=services,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects/status,verbs=get;update;patch
-
+// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects/finalizers,verbs=update;patch
 // Reconcile implements reconcile.TypedReconciler.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (reconcile.Result, error) {
 	// Get SparkConnect object.
