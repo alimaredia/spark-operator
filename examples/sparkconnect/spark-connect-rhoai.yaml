@@ -13,13 +13,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# SparkConnect example for Red Hat OpenShift AI (RHOAI).
+#
+# Key differences from the default example:
+# - Uses quay.io/opendatahub/data-processing image (includes start-connect-server.sh)
+# - Pins spark.driver.blockManager.port so NetworkPolicies can allow it
+# - Omits runAsUser/runAsGroup (OpenShift restricted-v2 SCC assigns UIDs automatically)
+# - Targets the redhat-ods-applications namespace
+#
+# A separate NetworkPolicy must be created to allow cross-namespace access on
+# ports 15002 (Spark Connect gRPC) and 7080 (BlockManager) from the workbench namespace.
+
 apiVersion: sparkoperator.k8s.io/v1alpha1
 kind: SparkConnect
 metadata:
   name: spark-connect
-  namespace: default
+  namespace: redhat-ods-applications
 spec:
   sparkVersion: 4.0.1
+  sparkConf:
+    spark.driver.blockManager.port: "7080"
   server:
     template:
       metadata:
@@ -32,7 +45,7 @@ spec:
       spec:
         containers:
         - name: spark-kubernetes-driver
-          image: docker.io/library/spark:4.0.1
+          image: quay.io/opendatahub/data-processing:Spark-v4.0.1
           imagePullPolicy: Always
           resources:
             requests:
@@ -46,8 +59,6 @@ spec:
           capabilities:
             drop:
             - ALL
-          runAsGroup: 185
-          runAsUser: 185
           runAsNonRoot: true
           allowPrivilegeEscalation: false
           seccompProfile:
@@ -67,14 +78,12 @@ spec:
       spec:
         containers:
         - name: spark-kubernetes-executor
-          image: docker.io/library/spark:4.0.1
+          image: quay.io/opendatahub/data-processing:Spark-v4.0.1
           imagePullPolicy: Always
         securityContext:
           capabilities:
             drop:
             - ALL
-          runAsGroup: 185
-          runAsUser: 185
           runAsNonRoot: true
           allowPrivilegeEscalation: false
           seccompProfile:
