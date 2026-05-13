@@ -7,11 +7,6 @@ spec:
   sparkVersion: 4.0.1
   server:
     template:
-      metadata:
-        labels:
-          key1: value1
-        annotations:
-          key3: value3
       spec:
         containers:
         - name: spark-kubernetes-driver
@@ -31,11 +26,6 @@ spec:
     cores: 1
     memory: 512m
     template:
-      metadata:
-        labels:
-          key1: value1
-        annotations:
-          key3: value3
       spec:
         containers:
         - name: spark-kubernetes-executor
