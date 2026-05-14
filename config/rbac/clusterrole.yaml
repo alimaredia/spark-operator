@@ -48,7 +48,7 @@ rules:
   verbs: [get, list, watch]
 - apiGroups: [sparkoperator.k8s.io]
   resources: [sparkconnects/finalizers]
-  verbs: [update, patch]
+  verbs: [update]
 - apiGroups: [sparkoperator.k8s.io]
   resources: [sparkapplications/finalizers]
   verbs: [update]
