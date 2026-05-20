@@ -20,8 +20,6 @@ metadata:
   namespace: redhat-ods-applications
 spec:
   sparkVersion: 4.0.1
-  sparkConf:
-    spark.driver.blockManager.port: "7079"
   server:
     template:
       spec:

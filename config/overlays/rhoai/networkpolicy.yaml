@@ -34,3 +34,6 @@ spec:
        - namespaceSelector:
            matchLabels:
              opendatahub.io/dashboard: "true"
+         podSelector:
+           matchLabels:
+             opendatahub.io/workbenches: "true"
