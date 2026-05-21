@@ -28,8 +28,17 @@ helm install spark-operator spark-operator/spark-operator \
     --create-namespace \
     --wait
 
+# Alternative install method using kustomize manifests
+git clone https://github.com/kubeflow/spark-operator.git && cd spark-operator
+kubectl apply -k config/default
+
 # Create an example application in the default namespace
 kubectl apply -f https://raw.githubusercontent.com/kubeflow/spark-operator/refs/heads/master/examples/spark-pi.yaml
+
+# If you use the kustomize install, also install Spark application RBAC in the namespace where you will run Spark applications. 
+# The example below runs in the default namespace and uses the spark-operator-spark service account.
+# For more information go to docs/kustomize-install.md
+kubectl -n default apply -k config/spark-rbac
 
 # Get the status of the application
 kubectl get sparkapp spark-pi
