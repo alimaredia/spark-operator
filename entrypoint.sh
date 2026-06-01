@@ -23,4 +23,4 @@ if ! getent passwd "$myuid" &> /dev/null; then
     done
 fi
 
-exec /usr/bin/tini -s -- /usr/bin/spark-operator "$@"
+exec /usr/bin/catatonit -s -- /usr/bin/spark-operator "$@"
