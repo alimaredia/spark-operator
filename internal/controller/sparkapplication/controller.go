@@ -24,7 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
@@ -56,6 +55,7 @@ import (
 // Options defines the options of the controller.
 type Options struct {
 	Namespaces            []string
+	NamespaceSelector     string
 	EnableUIService       bool
 	IngressClassName      string
 	IngressURLFormat      string
@@ -108,17 +108,15 @@ func NewReconciler(
 	}
 }
 
-// +kubebuilder:rbac:groups=,resources=pods,verbs=get;list;watch;create;update;patch;delete;deletecollection
-// +kubebuilder:rbac:groups=,resources=configmaps,verbs=get;list;create;update;patch;delete
-// +kubebuilder:rbac:groups=,resources=services,verbs=get;create;delete
-// +kubebuilder:rbac:groups=,resources=nodes,verbs=get
-// +kubebuilder:rbac:groups=,resources=events,verbs=create;update;patch
-// +kubebuilder:rbac:groups=,resources=resourcequotas,verbs=get;list;watch
-// +kubebuilder:rbac:groups=extensions,resources=ingresses,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;update;patch
+// +kubebuilder:rbac:groups=extensions,resources=ingresses,verbs=get;create;update;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;create;update;delete
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
-// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications/status,verbs=update
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -248,23 +246,37 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, options controller.Optio
 	// Use a custom log constructor.
 	options.LogConstructor = util.NewLogConstructor(mgr.GetLogger(), kind)
 
+	// Create event filters with error handling
+	podEventFilter, err := newSparkPodEventFilter(
+		mgr.GetClient(),
+		r.options.Namespaces,
+		r.options.NamespaceSelector,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create spark pod event filter: %v", err)
+	}
+
+	appEventFilter, err := NewSparkApplicationEventFilter(
+		mgr.GetClient(),
+		mgr.GetEventRecorderFor("spark-application-event-handler"),
+		r.options.Namespaces,
+		r.options.NamespaceSelector,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create spark application event filter: %v", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		Watches(
 			&corev1.Pod{},
 			NewSparkPodEventHandler(mgr.GetClient(), r.options.SparkExecutorMetrics),
-			builder.WithPredicates(newSparkPodEventFilter(r.options.Namespaces)),
+			builder.WithPredicates(podEventFilter),
 		).
 		Watches(
 			&v1beta2.SparkApplication{},
 			NewSparkApplicationEventHandler(r.options.SparkApplicationMetrics),
-			builder.WithPredicates(
-				NewSparkApplicationEventFilter(
-					mgr.GetClient(),
-					mgr.GetEventRecorderFor("spark-application-event-handler"),
-					r.options.Namespaces,
-				),
-			),
+			builder.WithPredicates(appEventFilter),
 		).
 		WithOptions(options).
 		Complete(r)
@@ -374,7 +386,7 @@ func (r *Reconciler) reconcileSubmittedSparkApplication(ctx context.Context, req
 					if err != nil {
 						return fmt.Errorf("failed to get driver ingress url: %v", err)
 					}
-					_, err = r.createDriverIngress(ctx, app, &driverIngressConfiguration, *service, ingressURL, r.options.IngressClassName)
+					_, err = r.createDriverIngress(ctx, app, &driverIngressConfiguration, *service, ingressURL, r.options.IngressClassName, r.options.IngressTLS, r.options.IngressAnnotations)
 					if err != nil {
 						return fmt.Errorf("failed to create driver ingress: %v", err)
 					}
@@ -962,6 +974,27 @@ func (r *Reconciler) updateDriverState(ctx context.Context, app *v1beta2.SparkAp
 
 	if driverPod == nil {
 		if app.Status.AppState.State != v1beta2.ApplicationStateSubmitted || metav1.Now().Sub(app.Status.LastSubmissionAttemptTime.Time) > r.options.DriverPodCreationGracePeriod {
+			r.recorder.Eventf(
+				app,
+				corev1.EventTypeWarning,
+				common.EventSparkDriverNotFound,
+				"Driver pod %s not found after grace period %v, marking application as Failing",
+				app.Status.DriverInfo.PodName,
+				r.options.DriverPodCreationGracePeriod,
+			)
+			logger := log.FromContext(ctx)
+			if app.Status.AppState.State == v1beta2.ApplicationStateSubmitted {
+				logger.Info("Driver pod not found after creation grace period; marking SparkApplication as Failing",
+					"driverPodName", app.Status.DriverInfo.PodName,
+					"lastSubmissionAttemptTime", app.Status.LastSubmissionAttemptTime,
+					"gracePeriod", r.options.DriverPodCreationGracePeriod,
+				)
+			} else {
+				logger.Info("Driver pod not found; marking SparkApplication as Failing",
+					"driverPodName", app.Status.DriverInfo.PodName,
+					"previousState", app.Status.AppState.State,
+				)
+			}
 			app.Status.AppState.State = v1beta2.ApplicationStateFailing
 			app.Status.AppState.ErrorMessage = "driver pod not found"
 			app.Status.TerminationTime = metav1.Now()
@@ -1000,6 +1033,7 @@ func (r *Reconciler) updateDriverState(ctx context.Context, app *v1beta2.SparkAp
 // updateExecutorState lists the executor pods of the application
 // and updates the executor state based on the current phase of the pods.
 func (r *Reconciler) updateExecutorState(ctx context.Context, app *v1beta2.SparkApplication) error {
+	logger := log.FromContext(ctx)
 	podList, err := r.getExecutorPods(ctx, app)
 	if err != nil {
 		return err
@@ -1063,7 +1097,7 @@ func (r *Reconciler) updateExecutorState(ctx context.Context, app *v1beta2.Spark
 				if app.Status.AppState.State == v1beta2.ApplicationStateCompleted {
 					app.Status.ExecutorState[name] = v1beta2.ExecutorStateCompleted
 				} else {
-					glog.Infof("Executor pod %s not found, assuming it was deleted.", name)
+					logger.Info("Executor pod not found, assuming it was deleted", "name", name)
 					app.Status.ExecutorState[name] = v1beta2.ExecutorStateFailed
 				}
 			} else {

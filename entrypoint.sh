@@ -23,5 +23,6 @@ if ! getent passwd "$myuid" &> /dev/null; then
     done
 fi
 
+# Path for catatonit may differ depending on base container OS
 CATATONIT=$(command -v catatonit) || { echo "error: catatonit not found in PATH" >&2; exit 1; }
 exec "$CATATONIT" -- /usr/bin/spark-operator "$@"

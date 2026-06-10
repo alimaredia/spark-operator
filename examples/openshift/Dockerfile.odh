@@ -7,7 +7,7 @@
 # Build Arguments
 ################################################################################
 ARG GO_BUILDER_IMAGE=registry.access.redhat.com/ubi9/go-toolset:1.25.7
-ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu:3.4.0-1773328752
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu:3.5.0-ea.2-1779922323
 
 ################################################################################
 # Stage 1: Build the Go operator binary

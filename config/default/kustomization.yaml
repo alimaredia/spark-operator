@@ -1,12 +1,7 @@
-# Default Kustomization - Main entry point for standalone/development deployment
-# This deploys to spark-operator namespace
+# Default Kustomization - Main entry point for standalone deployment
 #
 # Usage:
-#   oc apply -k config/default/ --server-side=true
-#
-# For environment-specific deployments, use overlays:
-#   - config/overlays/odh/   (namespace: opendatahub)
-#   - config/overlays/rhoai/ (namespace: redhat-ods-applications)
+#   kustomize build config/default/ | kubectl apply --server-side -f -
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -28,31 +23,9 @@ labels:
       app.kubernetes.io/name: spark-operator
       app.kubernetes.io/managed-by: kustomize
 
-# ConfigMap for parameters (same pattern as ODH/RHOAI overlays)
-configMapGenerator:
-  - name: spark-operator-params
-    envs:
-      - params.env
-
-# Image substitution - replaces $(SPARK_OPERATOR_*_IMAGE) variables in deployments
-replacements:
-  - source:
-      kind: ConfigMap
-      name: spark-operator-params
-      fieldPath: data.SPARK_OPERATOR_CONTROLLER_IMAGE
-    targets:
-      - select:
-          kind: Deployment
-          name: spark-operator-controller
-        fieldPaths:
-          - spec.template.spec.containers.[name=controller].image
-  - source:
-      kind: ConfigMap
-      name: spark-operator-params
-      fieldPath: data.SPARK_OPERATOR_WEBHOOK_IMAGE
-    targets:
-      - select:
-          kind: Deployment
-          name: spark-operator-webhook
-        fieldPaths:
-          - spec.template.spec.containers.[name=webhook].image
+# Image configuration - tag is derived from the VERSION file at the repo root.
+# To update: make kustomize-set-image
+# CI/e2e tests override this via: kustomize edit set image ...
+images:
+  - name: ghcr.io/kubeflow/spark-operator/controller
+    newTag: v2.5.0-rc.0

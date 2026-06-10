@@ -53,7 +53,6 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	sparkoperator "github.com/kubeflow/spark-operator/v2"
 	"github.com/kubeflow/spark-operator/v2/api/v1alpha1"
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
 	"github.com/kubeflow/spark-operator/v2/internal/controller/scheduledsparkapplication"
@@ -67,6 +66,7 @@ import (
 	"github.com/kubeflow/spark-operator/v2/pkg/common"
 	operatorscheme "github.com/kubeflow/spark-operator/v2/pkg/scheme"
 	"github.com/kubeflow/spark-operator/v2/pkg/util"
+	"github.com/kubeflow/spark-operator/v2/pkg/version"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -75,7 +75,8 @@ var (
 )
 
 var (
-	namespaces []string
+	namespaces        []string
+	namespaceSelector string
 
 	// Controller
 	controllerThreads        int
@@ -109,20 +110,26 @@ var (
 
 	driverPodCreationGracePeriod time.Duration
 
-	// Metrics
-	enableMetrics                 bool
-	metricsBindAddress            string
-	metricsEndpoint               string
-	metricsPrefix                 string
-	metricsLabels                 []string
-	metricsJobStartLatencyBuckets []float64
+	// Kubernetes API server QPS and Burst for the controller manager's client.
+	kubeAPIQPS   float32
+	kubeAPIBurst int
 
-	healthProbeBindAddress string
-	pprofBindAddress       string
-	secureMetrics          bool
-	enableHTTP2            bool
-	development            bool
-	zapOptions             = logzap.Options{}
+	// Metrics
+	enableMetrics                  bool
+	metricsBindAddress             string
+	metricsEndpoint                string
+	metricsPrefix                  string
+	metricsLabels                  []string
+	metricsJobSubmitLatencyBuckets []float64
+	metricsJobStartLatencyBuckets  []float64
+
+	healthProbeBindAddress                      string
+	pprofBindAddress                            string
+	secureMetrics                               bool
+	enableHTTP2                                 bool
+	scheduledSparkApplicationTimestampPrecision string
+	development                                 bool
+	zapOptions                                  = logzap.Options{}
 )
 
 func NewStartCommand() *cobra.Command {
@@ -144,16 +151,23 @@ func NewStartCommand() *cobra.Command {
 					return fmt.Errorf("failed parsing ingress-annotations JSON string from CLI: %v", err)
 				}
 			}
+
+			validPrecisions := []string{"nanos", "micros", "millis", "seconds", "minutes"}
+			if !slices.Contains(validPrecisions, scheduledSparkApplicationTimestampPrecision) {
+				return fmt.Errorf("invalid value %q for --scheduled-spark-application-timestamp-precision, valid values: %v", scheduledSparkApplicationTimestampPrecision, validPrecisions)
+			}
+
 			return nil
 		},
 		Run: func(_ *cobra.Command, args []string) {
-			sparkoperator.PrintVersion(false)
+			version.PrintVersion(false)
 			start()
 		},
 	}
 
 	command.Flags().IntVar(&controllerThreads, "controller-threads", 10, "Number of worker threads used by the SparkApplication controller.")
 	command.Flags().StringSliceVar(&namespaces, "namespaces", []string{}, "The Kubernetes namespace to manage. Will manage custom resource objects of the managed CRD types for the whole cluster if unset or contains empty string.")
+	command.Flags().StringVar(&namespaceSelector, "namespace-selector", "", "Label selector for namespaces to watch (e.g., 'spark-operator=enabled,env in (prod,staging)'). Namespaces matching this selector will be watched in addition to those specified via --namespaces. Requires ClusterRole permission to list and watch namespaces.")
 	command.Flags().DurationVar(&cacheSyncTimeout, "cache-sync-timeout", 30*time.Second, "Informer cache sync timeout.")
 	command.Flags().IntVar(&maxTrackedExecutorPerApp, "max-tracked-executor-per-app", 1000, "The maximum number of tracked executors per SparkApplication.")
 
@@ -181,12 +195,16 @@ func NewStartCommand() *cobra.Command {
 
 	command.Flags().DurationVar(&driverPodCreationGracePeriod, "driver-pod-creation-grace-period", 10*time.Second, "Grace period after a successful spark-submit when driver pod not found errors will be retried. Useful if the driver pod can take some time to be created.")
 
+	command.Flags().Float32Var(&kubeAPIQPS, "kube-api-qps", 20, "Maximum QPS to the API server from the controller client.")
+	command.Flags().IntVar(&kubeAPIBurst, "kube-api-burst", 30, "Maximum burst for throttle from the controller client.")
+
 	command.Flags().BoolVar(&enableMetrics, "enable-metrics", false, "Enable metrics.")
 	command.Flags().StringVar(&metricsBindAddress, "metrics-bind-address", "0", "The address the metric endpoint binds to. "+
 		"Use the port :8080. If not set, it will be 0 in order to disable the metrics server")
 	command.Flags().StringVar(&metricsEndpoint, "metrics-endpoint", "/metrics", "Metrics endpoint.")
 	command.Flags().StringVar(&metricsPrefix, "metrics-prefix", "", "Prefix for the metrics.")
 	command.Flags().StringSliceVar(&metricsLabels, "metrics-labels", []string{}, "Labels to be added to the metrics.")
+	command.Flags().Float64SliceVar(&metricsJobSubmitLatencyBuckets, "metrics-job-submit-latency-buckets", []float64{0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256}, "Buckets for the job submit latency histogram.")
 	command.Flags().Float64SliceVar(&metricsJobStartLatencyBuckets, "metrics-job-start-latency-buckets", []float64{30, 60, 90, 120, 150, 180, 210, 240, 270, 300}, "Buckets for the job start latency histogram.")
 
 	command.Flags().StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -195,6 +213,8 @@ func NewStartCommand() *cobra.Command {
 
 	command.Flags().StringVar(&pprofBindAddress, "pprof-bind-address", "0", "The address the pprof endpoint binds to. "+
 		"If not set, it will be 0 in order to disable the pprof server")
+
+	command.Flags().StringVar(&scheduledSparkApplicationTimestampPrecision, "scheduled-spark-application-timestamp-precision", "nanos", "Timestamp precision for ScheduledSparkApplication run names. Valid values: nanos, micros, millis, seconds, minutes.")
 
 	flagSet := flag.NewFlagSet("controller", flag.ExitOnError)
 	ctrl.RegisterFlags(flagSet)
@@ -216,6 +236,9 @@ func start() {
 		logger.Error(err, "failed to get kube config")
 		os.Exit(1)
 	}
+
+	cfg.QPS = kubeAPIQPS
+	cfg.Burst = kubeAPIBurst
 
 	// Create the manager.
 	tlsOptions := newTLSOptions()
@@ -380,8 +403,15 @@ func newTLSOptions() []func(c *tls.Config) {
 
 // newCacheOptions creates and returns a cache.Options instance configured with default namespaces and object caching settings.
 func newCacheOptions() cache.Options {
-	defaultNamespaces := make(map[string]cache.Config)
-	if !slices.Contains(namespaces, cache.AllNamespaces) {
+	var defaultNamespaces map[string]cache.Config
+
+	// When using namespace selector, we need to cache ALL namespaces for resources
+	// because we'll filter dynamically in the event filter based on namespace labels.
+	// When using explicit namespace list only, we can cache just those namespaces.
+	if namespaceSelector != "" {
+		defaultNamespaces = nil
+	} else if !slices.Contains(namespaces, cache.AllNamespaces) {
+		defaultNamespaces = make(map[string]cache.Config)
 		for _, ns := range namespaces {
 			defaultNamespaces[ns] = cache.Config{}
 		}
@@ -391,6 +421,7 @@ func newCacheOptions() cache.Options {
 		Scheme:            operatorscheme.ControllerScheme,
 		DefaultNamespaces: defaultNamespaces,
 		ByObject: map[client.Object]cache.ByObject{
+			&corev1.Namespace{}: {},
 			&corev1.Pod{}: {
 				Label: labels.SelectorFromSet(labels.Set{
 					common.LabelLaunchedBySparkOperator: "true",
@@ -426,13 +457,14 @@ func newSparkApplicationReconcilerOptions() sparkapplication.Options {
 	var sparkApplicationMetrics *metrics.SparkApplicationMetrics
 	var sparkExecutorMetrics *metrics.SparkExecutorMetrics
 	if enableMetrics {
-		sparkApplicationMetrics = metrics.NewSparkApplicationMetrics(metricsPrefix, metricsLabels, metricsJobStartLatencyBuckets)
+		sparkApplicationMetrics = metrics.NewSparkApplicationMetrics(metricsPrefix, metricsLabels, metricsJobSubmitLatencyBuckets, metricsJobStartLatencyBuckets)
 		sparkApplicationMetrics.Register()
 		sparkExecutorMetrics = metrics.NewSparkExecutorMetrics(metricsPrefix, metricsLabels)
 		sparkExecutorMetrics.Register()
 	}
 	options := sparkapplication.Options{
 		Namespaces:                   namespaces,
+		NamespaceSelector:            namespaceSelector,
 		EnableUIService:              enableUIService,
 		IngressClassName:             ingressClassName,
 		IngressURLFormat:             ingressURLFormat,
@@ -452,14 +484,17 @@ func newSparkApplicationReconcilerOptions() sparkapplication.Options {
 
 func newScheduledSparkApplicationReconcilerOptions() scheduledsparkapplication.Options {
 	options := scheduledsparkapplication.Options{
-		Namespaces: namespaces,
+		Namespaces:         namespaces,
+		NamespaceSelector:  namespaceSelector,
+		TimestampPrecision: scheduledSparkApplicationTimestampPrecision,
 	}
 	return options
 }
 
 func newSparkConnectReconcilerOptions() sparkconnect.Options {
 	options := sparkconnect.Options{
-		Namespaces: namespaces,
+		Namespaces:        namespaces,
+		NamespaceSelector: namespaceSelector,
 	}
 	return options
 }

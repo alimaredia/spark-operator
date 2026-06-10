@@ -19,7 +19,7 @@ package version
 import (
 	"github.com/spf13/cobra"
 
-	sparkoperator "github.com/kubeflow/spark-operator/v2"
+	"github.com/kubeflow/spark-operator/v2/pkg/version"
 )
 
 var (
@@ -31,7 +31,7 @@ func NewCommand() *cobra.Command {
 		Use:   "version",
 		Short: "Print version information",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sparkoperator.PrintVersion(short)
+			version.PrintVersion(short)
 			return nil
 		},
 	}

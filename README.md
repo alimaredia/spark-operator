@@ -18,6 +18,8 @@ The Kubernetes Operator for Apache Spark aims to make specifying and running [Sp
 
 For a more detailed guide, please refer to the [Getting Started guide](https://www.kubeflow.org/docs/components/spark-operator/getting-started/).
 
+### Installation with Helm
+
 ```bash
 # Add the Helm repository
 helm repo add --force-update spark-operator https://kubeflow.github.io/spark-operator
@@ -27,6 +29,29 @@ helm install spark-operator spark-operator/spark-operator \
     --namespace spark-operator \
     --create-namespace \
     --wait
+
+# Create an example application in the default namespace
+kubectl apply -f https://raw.githubusercontent.com/kubeflow/spark-operator/refs/heads/master/examples/spark-pi.yaml
+
+# Get the status of the application
+kubectl get sparkapp spark-pi
+
+# Delete the application
+kubectl delete sparkapp spark-pi
+```
+
+### Installation with Kustomize
+
+An alternative install method is using kustomize manifests.
+For more information go to the [kustomize installation docs](docs/kustomize-installation.md).
+
+```bash
+git clone https://github.com/kubeflow/spark-operator.git && cd spark-operator
+kubectl apply -k config/default --server-side --force-conflicts
+
+# If you use kustomize to install, also install Spark application RBAC in the namespace where you will run Spark applications. 
+# The example below runs in the default namespace and uses the spark-operator-spark service account.
+kubectl -n default apply -k config/spark-rbac
 
 # Create an example application in the default namespace
 kubectl apply -f https://raw.githubusercontent.com/kubeflow/spark-operator/refs/heads/master/examples/spark-pi.yaml
@@ -116,7 +141,7 @@ For contributing to Spark Operator, please refer to [Contributor Guide](CONTRIBU
 
 ## Community
 
-- Join the [CNCF Slack Channel](https://www.kubeflow.org/docs/about/community/#kubeflow-slack-channels) and then join `#kubeflow-spark-operator` Channel.
+- Join the [CNCF Slack Channel](https://www.kubeflow.org/docs/about/community/#kubeflow-slack-channels) and then join `#kubeflow-spark-on-kubernetes` Channel.
 - Check out our blog post [Announcing the Kubeflow Spark Operator: Building a Stronger Spark on Kubernetes Community](https://blog.kubeflow.org/operators/2024/04/15/kubeflow-spark-operator.html).
 - Join our monthly community meeting [Kubeflow Spark Operator Meeting Notes](https://bit.ly/3VGzP4n).
 

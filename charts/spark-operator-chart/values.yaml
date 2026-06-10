@@ -64,6 +64,16 @@ hook:
   # -- List of node taints to tolerate for the Helm hook Job.
   tolerations: []
 
+  # -- Extra labels for the Helm hook Job pod.
+  labels: {}
+    # key1: value1
+    # key2: value2
+
+  # -- Extra annotations for the Helm hook Job pod.
+  annotations: {}
+    # key1: value1
+    # key2: value2
+
 controller:
   # -- Number of replicas of controller.
   replicas: 1
@@ -102,6 +112,21 @@ controller:
 
   # -- Specifies the maximum number of Executor pods that can be tracked by the controller per SparkApplication.
   maxTrackedExecutorPerApp: 1000
+
+  # -- Maximum QPS to the API server from the controller client.
+  kubeAPIQPS: 20
+  # -- Maximum burst for throttle from the controller client.
+  kubeAPIBurst: 30
+
+  # -- Timestamp precision for ScheduledSparkApplication run names.
+  # Valid values: nanos (default), micros, millis, seconds, minutes.
+  # Shorter precisions produce shorter names which helps with Kubernetes name length limits.
+  # NOTE: Using lower precisions such as "seconds" or "minutes" increases the risk of name
+  # collisions if multiple runs are created within the same time unit (for example during
+  # reconciliation loops or manual re-triggers). A collision will cause run creation to fail.
+  # Choose a precision compatible with your scheduling frequency: "minutes" is only suitable
+  # for jobs scheduled at most once per minute, "seconds" for jobs scheduled at most once per second.
+  scheduledSparkApplicationTimestampPrecision: nanos
 
   uiService:
     # -- Specifies whether to create service for Spark web UI.
@@ -306,6 +331,11 @@ webhook:
   # -- Specifies the timeout seconds of the webhook, the value must be between 1 and 30.
   timeoutSeconds: 10
 
+  # -- Maximum QPS to the API server from the controller client.
+  kubeAPIQPS: 20
+  # -- Maximum burst for throttle from the controller client.
+  kubeAPIBurst: 30
+
   resourceQuotaEnforcement:
     # -- Specifies whether to enable the ResourceQuota enforcement for SparkApplication resources.
     enable: false
@@ -426,9 +456,17 @@ webhook:
 spark:
   # -- List of namespaces where to run spark jobs.
   # If empty string is included, all namespaces will be allowed.
+  # Namespaces specified here will be watched in addition to those matching jobNamespaceSelector.
   # Make sure the namespaces have already existed.
   jobNamespaces:
   - default
+
+  # -- Label selector to filter namespaces to watch.
+  # Supports standard Kubernetes label selector syntax (e.g., 'spark-operator=enabled,env in (prod,staging)').
+  # Namespaces matching this selector will be watched in addition to those in jobNamespaces.
+  # When specified, requires ClusterRole permission to list and watch namespaces.
+  # Leave empty to disable namespace selector functionality.
+  jobNamespaceSelector: ""
 
   serviceAccount:
     # -- Specifies whether to create a service account for spark applications.
@@ -458,8 +496,13 @@ prometheus:
     endpoint: /metrics
     # -- Metrics prefix, will be added to all exported metrics.
     prefix: ""
+    # -- Job Submit Latency histogram buckets. Specified in seconds.
+    jobSubmitLatencyBuckets: "0.5,1,2,4,8,16,32,64,128,256"
     # -- Job Start Latency histogram buckets. Specified in seconds.
     jobStartLatencyBuckets: "30,60,90,120,150,180,210,240,270,300"
+    # -- Labels to be added to the Spark Operator standard metrics, e.g., "label1Key,label2Key".
+    # Defaults to 'app_type' if not set.
+    labels: ""
 
   # Prometheus pod monitor for controller pods
   podMonitor:

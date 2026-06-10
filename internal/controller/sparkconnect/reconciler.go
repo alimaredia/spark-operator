@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -54,7 +55,8 @@ const (
 // Options defines the options of SparkConnect reconciler.
 type Options struct {
 	// A list of namespaces that should be watched.
-	Namespaces []string
+	Namespaces        []string
+	NamespaceSelector string
 }
 
 // Reconciler reconciles a SparkConnect object.
@@ -92,6 +94,16 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, options controller.Optio
 
 	// Use a custom log constructor.
 	options.LogConstructor = util.NewLogConstructor(mgr.GetLogger(), kind)
+
+	// Create predicate before the builder chain.
+	namespacePredicate, err := util.NewNamespacePredicate(
+		r.client,
+		r.options.Namespaces,
+		r.options.NamespaceSelector,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create namespace predicate: %w", err)
+	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.SparkConnect{}).
@@ -165,18 +177,18 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, options controller.Optio
 				}),
 			),
 		).
-		WithEventFilter(util.NewNamespacePredicate(r.options.Namespaces)).
+		WithEventFilter(namespacePredicate).
 		WithOptions(options).
 		Complete(r)
 }
 
-// +kubebuilder:rbac:groups=,resources=events,verbs=create;update;patch
-// +kubebuilder:rbac:groups=,resources=configmaps,verbs=get;list;create;update;delete
-// +kubebuilder:rbac:groups=,resources=pods,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=,resources=services,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects,verbs=get;list;watch
+// +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects/status,verbs=update
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects/finalizers,verbs=update
+
 // Reconcile implements reconcile.TypedReconciler.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (reconcile.Result, error) {
 	// Get SparkConnect object.
@@ -490,28 +502,32 @@ func (r *Reconciler) mutateServerService(_ context.Context, conn *v1alpha1.Spark
 	if svc.CreationTimestamp.IsZero() {
 		svc.Spec.Ports = []corev1.ServicePort{
 			{
-				Name:       "driver-rpc",
-				Port:       7078,
-				TargetPort: intstr.FromInt(7078),
-				Protocol:   corev1.ProtocolTCP,
+				Name:        "driver-rpc",
+				Port:        7078,
+				TargetPort:  intstr.FromInt(7078),
+				Protocol:    corev1.ProtocolTCP,
+				AppProtocol: ptr.To("tcp"),
 			},
 			{
-				Name:       "blockmanager",
-				Port:       7079,
-				TargetPort: intstr.FromInt(7079),
-				Protocol:   corev1.ProtocolTCP,
+				Name:        "blockmanager",
+				Port:        7079,
+				TargetPort:  intstr.FromInt(7079),
+				Protocol:    corev1.ProtocolTCP,
+				AppProtocol: ptr.To("tcp"),
 			},
 			{
-				Name:       "web-ui",
-				Port:       4040,
-				TargetPort: intstr.FromInt(4040),
-				Protocol:   corev1.ProtocolTCP,
+				Name:        "web-ui",
+				Port:        4040,
+				TargetPort:  intstr.FromInt(4040),
+				Protocol:    corev1.ProtocolTCP,
+				AppProtocol: ptr.To("http"),
 			},
 			{
-				Name:       "spark-connect-server",
-				Port:       15002,
-				TargetPort: intstr.FromInt(15002),
-				Protocol:   corev1.ProtocolTCP,
+				Name:        "spark-connect-server",
+				Port:        15002,
+				TargetPort:  intstr.FromInt(15002),
+				Protocol:    corev1.ProtocolTCP,
+				AppProtocol: ptr.To("grpc"),
 			},
 		}
 

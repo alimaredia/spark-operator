@@ -1,6 +1,6 @@
 # spark-operator
 
-![Version: 2.4.0](https://img.shields.io/badge/Version-2.4.0-informational?style=flat-square) ![AppVersion: 2.4.0](https://img.shields.io/badge/AppVersion-2.4.0-informational?style=flat-square)
+![Version: 2.5.0-rc.0](https://img.shields.io/badge/Version-2.5.0--rc.0-informational?style=flat-square) ![AppVersion: 2.5.0-rc.0](https://img.shields.io/badge/AppVersion-2.5.0--rc.0-informational?style=flat-square)
 
 A Helm chart for Spark on Kubernetes operator.
 
@@ -90,6 +90,8 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | hook.nodeSelector | object | `{}` | Node selector for the Helm hook Job. |
 | hook.affinity | object | `{}` | Affinity for the Helm hook Job. |
 | hook.tolerations | list | `[]` | List of node taints to tolerate for the Helm hook Job. |
+| hook.labels | object | `{}` | Extra labels for the Helm hook Job pod. |
+| hook.annotations | object | `{}` | Extra annotations for the Helm hook Job pod. |
 | controller.replicas | int | `1` | Number of replicas of controller. |
 | controller.featureGates | list | `[{"enabled":false,"name":"PartialRestart"},{"enabled":false,"name":"LoadSparkDefaults"}]` | Feature gates to enable or disable specific features. |
 | controller.revisionHistoryLimit | int | `10` | The number of old history to retain to allow rollback. |
@@ -102,6 +104,9 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | controller.logEncoder | string | `"console"` | Configure the encoder of logging, can be one of `console` or `json`. |
 | controller.driverPodCreationGracePeriod | string | `"10s"` | Grace period after a successful spark-submit when driver pod not found errors will be retried. Useful if the driver pod can take some time to be created. |
 | controller.maxTrackedExecutorPerApp | int | `1000` | Specifies the maximum number of Executor pods that can be tracked by the controller per SparkApplication. |
+| controller.kubeAPIQPS | int | `20` | Maximum QPS to the API server from the controller client. |
+| controller.kubeAPIBurst | int | `30` | Maximum burst for throttle from the controller client. |
+| controller.scheduledSparkApplicationTimestampPrecision | string | `"nanos"` | Timestamp precision for ScheduledSparkApplication run names. Valid values: nanos (default), micros, millis, seconds, minutes. Shorter precisions produce shorter names which helps with Kubernetes name length limits. NOTE: Using lower precisions such as "seconds" or "minutes" increases the risk of name collisions if multiple runs are created within the same time unit (for example during reconciliation loops or manual re-triggers). A collision will cause run creation to fail. Choose a precision compatible with your scheduling frequency: "minutes" is only suitable for jobs scheduled at most once per minute, "seconds" for jobs scheduled at most once per second. |
 | controller.uiService.enable | bool | `true` | Specifies whether to create service for Spark web UI. |
 | controller.uiIngress.enable | bool | `false` | Specifies whether to create ingress for Spark web UI. `controller.uiService.enable` must be `true` to enable ingress. |
 | controller.uiIngress.urlFormat | string | `""` | Ingress URL format. Required if `controller.uiIngress.enable` is true. |
@@ -152,6 +157,8 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | webhook.portName | string | `"webhook"` | Specifies webhook service port name. |
 | webhook.failurePolicy | string | `"Fail"` | Specifies how unrecognized errors are handled. Available options are `Ignore` or `Fail`. |
 | webhook.timeoutSeconds | int | `10` | Specifies the timeout seconds of the webhook, the value must be between 1 and 30. |
+| webhook.kubeAPIQPS | int | `20` | Maximum QPS to the API server from the controller client. |
+| webhook.kubeAPIBurst | int | `30` | Maximum burst for throttle from the controller client. |
 | webhook.resourceQuotaEnforcement.enable | bool | `false` | Specifies whether to enable the ResourceQuota enforcement for SparkApplication resources. |
 | webhook.serviceAccount.create | bool | `true` | Specifies whether to create a service account for the webhook. |
 | webhook.serviceAccount.name | string | `""` | Optional name for the webhook service account. |
@@ -177,7 +184,8 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | webhook.securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"privileged":false,"readOnlyRootFilesystem":true,"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Security context for webhook containers. |
 | webhook.podDisruptionBudget.enable | bool | `false` | Specifies whether to create pod disruption budget for webhook. Ref: [Specifying a Disruption Budget for your Application](https://kubernetes.io/docs/tasks/run-application/configure-pdb/) |
 | webhook.podDisruptionBudget.minAvailable | int | `1` | The number of pods that must be available. Require `webhook.replicas` to be greater than 1 |
-| spark.jobNamespaces | list | `["default"]` | List of namespaces where to run spark jobs. If empty string is included, all namespaces will be allowed. Make sure the namespaces have already existed. |
+| spark.jobNamespaces | list | `["default"]` | List of namespaces where to run spark jobs. If empty string is included, all namespaces will be allowed. Namespaces specified here will be watched in addition to those matching jobNamespaceSelector. Make sure the namespaces have already existed. |
+| spark.jobNamespaceSelector | string | `""` | Label selector to filter namespaces to watch. Supports standard Kubernetes label selector syntax (e.g., 'spark-operator=enabled,env in (prod,staging)'). Namespaces matching this selector will be watched in addition to those in jobNamespaces. When specified, requires ClusterRole permission to list and watch namespaces. Leave empty to disable namespace selector functionality. |
 | spark.serviceAccount.create | bool | `true` | Specifies whether to create a service account for spark applications. |
 | spark.serviceAccount.name | string | `""` | Optional name for the spark service account. |
 | spark.serviceAccount.annotations | object | `{}` | Optional annotations for the spark service account. |
@@ -189,7 +197,9 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | prometheus.metrics.portName | string | `"metrics"` | Metrics port name. |
 | prometheus.metrics.endpoint | string | `"/metrics"` | Metrics serving endpoint. |
 | prometheus.metrics.prefix | string | `""` | Metrics prefix, will be added to all exported metrics. |
+| prometheus.metrics.jobSubmitLatencyBuckets | string | `"0.5,1,2,4,8,16,32,64,128,256"` | Job Submit Latency histogram buckets. Specified in seconds. |
 | prometheus.metrics.jobStartLatencyBuckets | string | `"30,60,90,120,150,180,210,240,270,300"` | Job Start Latency histogram buckets. Specified in seconds. |
+| prometheus.metrics.labels | string | `""` | Labels to be added to the Spark Operator standard metrics, e.g., "label1Key,label2Key". Defaults to 'app_type' if not set. |
 | prometheus.podMonitor.create | bool | `false` | Specifies whether to create pod monitor. Note that prometheus metrics should be enabled as well. |
 | prometheus.podMonitor.labels | object | `{}` | Pod monitor labels |
 | prometheus.podMonitor.jobLabel | string | `"spark-operator-podmonitor"` | The label to use to retrieve the job name from |

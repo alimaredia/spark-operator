@@ -163,3 +163,165 @@ tests:
           kind: RoleBinding
           name: spark-operator-webhook
           namespace: spark
+
+  # ---- RBAC rule content assertions (least privilege) ----
+  # These tests set spark.jobNamespaces to [""] to trigger cluster-wide
+  # policyRules inclusion in the ClusterRole (documentIndex 0).
+
+  - it: Should include webhook policyRules in ClusterRole when jobNamespaceSelector is set
+    set:
+      spark:
+        jobNamespaces:
+          - default
+        jobNamespaceSelector: "spark=enabled"
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - pods
+            verbs:
+              - list
+              - watch
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - sparkoperator.k8s.io
+            resources:
+              - sparkapplications
+              - scheduledsparkapplications
+            verbs:
+              - get
+              - list
+              - watch
+
+  - it: Should grant pods list/watch in webhook ClusterRole
+    set:
+      spark:
+        jobNamespaces:
+          - ""
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - pods
+            verbs:
+              - list
+              - watch
+
+  - it: Should grant resourcequotas only list in webhook ClusterRole
+    set:
+      spark:
+        jobNamespaces:
+          - ""
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - resourcequotas
+            verbs:
+              - list
+
+  - it: Should grant sparkapplications and scheduledsparkapplications only get/list/watch in webhook ClusterRole
+    set:
+      spark:
+        jobNamespaces:
+          - ""
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - sparkoperator.k8s.io
+            resources:
+              - sparkapplications
+              - scheduledsparkapplications
+            verbs:
+              - get
+              - list
+              - watch
+      - notContains:
+          path: rules
+          content:
+            apiGroups:
+              - sparkoperator.k8s.io
+            resources:
+              - sparkapplications
+              - scheduledsparkapplications
+            verbs:
+              - create
+      - notContains:
+          path: rules
+          content:
+            apiGroups:
+              - sparkoperator.k8s.io
+            resources:
+              - sparkapplications
+              - scheduledsparkapplications
+            verbs:
+              - update
+      - notContains:
+          path: rules
+          content:
+            apiGroups:
+              - sparkoperator.k8s.io
+            resources:
+              - sparkapplications
+              - scheduledsparkapplications
+            verbs:
+              - patch
+      - notContains:
+          path: rules
+          content:
+            apiGroups:
+              - sparkoperator.k8s.io
+            resources:
+              - sparkapplications
+              - scheduledsparkapplications
+            verbs:
+              - delete
+
+  - it: Should not grant any permissions on sparkapplications/status or finalizers in webhook ClusterRole
+    set:
+      spark:
+        jobNamespaces:
+          - ""
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            resources:
+              - sparkapplications/status
+          any: true
+      - notContains:
+          path: rules
+          content:
+            resources:
+              - sparkapplications/finalizers
+          any: true
+      - notContains:
+          path: rules
+          content:
+            resources:
+              - scheduledsparkapplications/status
+          any: true
+      - notContains:
+          path: rules
+          content:
+            resources:
+              - scheduledsparkapplications/finalizers
+          any: true
