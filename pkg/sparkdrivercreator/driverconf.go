@@ -81,6 +81,13 @@ type driverConf struct {
 	appID              string // spark-<32hex>, randomized (normalized away in the oracle)
 	resourceNamePrefix string // <appName>-<16hex>, randomized (normalized away)
 	sparkVersion       string // value of the spark-version label (the runtime Spark version)
+	configMapName      string // spark-drv-<16hex>-conf-map, randomized (normalized away)
+	localDir           string // /var/data/spark-<uuid>, randomized (normalized away)
+
+	// Application entry point (JVM/Scala apps only in this subset).
+	mainClass       string
+	mainAppResource string
+	appArgs         []string
 
 	// Image.
 	image           string
@@ -107,6 +114,10 @@ type driverConf struct {
 	// Identity of the effective user; SPARK_USER is set from proxyUser when set,
 	// else the submitting OS user.
 	proxyUser string
+
+	// serviceAccount is spark.kubernetes.authenticate.driver.serviceAccountName
+	// (driver.serviceAccount); empty means unset (field omitted from the pod).
+	serviceAccount string
 
 	// sparkConf is the raw user conf, consulted for port overrides.
 	sparkConf map[string]string
@@ -155,6 +166,8 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 		appID:                 generateAppID(),
 		resourceNamePrefix:    generateResourceNamePrefix(appName),
 		sparkVersion:          app.Spec.SparkVersion,
+		configMapName:         generateConfigMapName(),
+		localDir:              generateLocalDir(),
 		image:                 image,
 		imagePullPolicy:       defaultImagePullPolicy,
 		cores:                 cores,
@@ -167,6 +180,13 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 		environment:           driverEnv(driver),
 		nodeSelector:          driverNodeSelector(app),
 		sparkConf:             copyStringMap(app.Spec.SparkConf),
+		appArgs:               append([]string(nil), app.Spec.Arguments...),
+	}
+	if app.Spec.MainClass != nil {
+		c.mainClass = *app.Spec.MainClass
+	}
+	if app.Spec.MainApplicationFile != nil {
+		c.mainAppResource = *app.Spec.MainApplicationFile
 	}
 	// Labels need the resolved appID/sparkVersion, so build them from c.
 	c.labels = driverLabels(c, driver.Labels)
@@ -176,6 +196,9 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 	}
 	if app.Spec.ProxyUser != nil {
 		c.proxyUser = *app.Spec.ProxyUser
+	}
+	if driver.ServiceAccount != nil {
+		c.serviceAccount = *driver.ServiceAccount
 	}
 	return c, nil
 }
@@ -289,6 +312,31 @@ func generateResourceNamePrefix(appName string) string {
 		prefix = "x" + prefix[1:]
 	}
 	return prefix
+}
+
+// generateConfigMapName returns "spark-drv-<16hex>-conf-map", matching
+// KubernetesClientUtils.configMapNameDriver (spark-drv-<uniqueID>-conf-map).
+func generateConfigMapName() string {
+	return "spark-drv-" + randHex(8) + "-conf-map"
+}
+
+// generateLocalDir returns the default local dir Spark's LocalDirsFeatureStep
+// mounts when the user configures none: /var/data/spark-<uuid>.
+func generateLocalDir() string {
+	return "/var/data/spark-" + randUUID()
+}
+
+// randUUID returns a random RFC-4122-shaped UUID (8-4-4-4-12 hex). Only the
+// shape matters here — the value is normalized to a placeholder in the oracle.
+func randUUID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		for i := range b {
+			b[i] = 0
+		}
+	}
+	s := hex.EncodeToString(b)
+	return s[0:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:32]
 }
 
 func randHex(n int) string {

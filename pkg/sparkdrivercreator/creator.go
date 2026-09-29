@@ -31,17 +31,20 @@ limitations under the License.
 package sparkdrivercreator
 
 import (
-	"errors"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
 )
 
-// ErrNotImplemented is returned by Build until the pure-Go port lands. The
-// oracle test skips (rather than fails) while this is the case, so the golden
-// files can be committed and wired ahead of the implementation.
-var ErrNotImplemented = errors.New("sparkdrivercreator: Build not yet implemented")
+// podAPIVersion / podKind stamp the driver pod's TypeMeta so the marshaled
+// object carries apiVersion/kind like the captured golden does.
+const (
+	podAPIVersion = "v1"
+	podKind       = "Pod"
+)
 
 // DriverResources is everything the driver pod needs to exist: the pod itself
 // plus the resources spark-submit would otherwise create and own.
@@ -65,9 +68,38 @@ func New() *SparkDriverCreator { return &SparkDriverCreator{} }
 // for app. It assumes the deny-list has already rejected non-reproducible
 // inputs.
 func (c *SparkDriverCreator) Build(app *v1beta2.SparkApplication) (*DriverResources, error) {
-	// TODO(sparkdrivercreator): port BasicDriverFeatureStep, DriverServiceFeatureStep,
-	// LocalDirsFeatureStep, MountSecrets/EnvSecrets/MountVolumes, and
-	// DriverCommandFeatureStep, plus the driver ConfigMap assembly. Pin each
-	// against test/oracle/golden/<version>/.
-	return nil, ErrNotImplemented
+	conf, err := newDriverConf(app)
+	if err != nil {
+		return nil, fmt.Errorf("sparkdrivercreator: resolving driver conf: %w", err)
+	}
+
+	pod := buildDriverPod(conf)
+	// TODO(sparkdrivercreator): assemble the driver Service and ConfigMap. Until
+	// then they stay nil and the oracle skips those objects.
+	return &DriverResources{Pod: pod}, nil
+}
+
+// buildDriverPod runs the reproducible feature steps in Spark's order and folds
+// the resulting container into the pod, mirroring
+// KubernetesDriverBuilder.buildFromFeatures followed by the inline conf-volume
+// wiring in KubernetesClientApplication.run.
+func buildDriverPod(conf *driverConf) *corev1.Pod {
+	steps := []featureStep{
+		newBasicDriverFeatureStep(conf),
+		newDriverKubernetesCredentialsFeatureStep(conf),
+		newLocalDirsFeatureStep(conf),
+		newDriverCommandFeatureStep(conf),
+	}
+
+	sp := initialSparkPod()
+	for _, step := range steps {
+		sp = step.configurePod(sp)
+	}
+	// Conf volume is attached after the feature steps, exactly as Client.run does.
+	sp = attachConfVolume(sp, conf)
+
+	pod := sp.pod
+	pod.TypeMeta = metav1.TypeMeta{APIVersion: podAPIVersion, Kind: podKind}
+	pod.Spec.Containers = append(pod.Spec.Containers, *sp.container)
+	return pod
 }

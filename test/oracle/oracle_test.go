@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -105,8 +106,9 @@ func TestGoldenWellFormed(t *testing.T) {
 
 // TestDriverSpecMatchesOracle is the differential test proper: build the driver
 // resources in pure Go and require them to match stock spark-submit's captured
-// output. It skips until SparkDriverCreator.Build is implemented, so the golden
-// files (and this harness) can land first.
+// output. Each captured object is its own subtest; an object Build does not yet
+// produce (a nil field) skips rather than fails, so the objects can land one at a
+// time behind their committed goldens.
 func TestDriverSpecMatchesOracle(t *testing.T) {
 	for _, ver := range sparkVersions {
 		for _, name := range discoverCases(t, ver) {
@@ -114,18 +116,32 @@ func TestDriverSpecMatchesOracle(t *testing.T) {
 				app := loadApplication(t, name, ver)
 
 				res, err := sparkdrivercreator.New().Build(app)
-				if err != nil && strings.Contains(err.Error(), "not yet implemented") {
-					t.Skipf("SparkDriverCreator.Build not implemented yet; golden for %s/%s is committed and ready", ver, name)
-				}
 				require.NoError(t, err)
 				require.NotNil(t, res)
+				require.NotNil(t, res.Pod, "driver pod must always be built")
 
+				// Vars are extracted from the pod (it carries the app id / prefix /
+				// configmap id / local dir the other objects reference).
 				vars := oraclenorm.Extract(toUnstructured(t, res.Pod, "Pod", "v1"))
 				dir := filepath.Join("golden", ver, name)
 
-				compare(t, dir, "driver-pod.json", res.Pod, "Pod", "v1", vars)
-				compare(t, dir, "configmap.json", res.ConfigMap, "ConfigMap", "v1", vars)
-				compare(t, dir, "service.json", res.Service, "Service", "v1", vars)
+				objects := []struct {
+					kind string
+					file string
+					obj  any
+				}{
+					{"Pod", "driver-pod.json", res.Pod},
+					{"ConfigMap", "configmap.json", res.ConfigMap},
+					{"Service", "service.json", res.Service},
+				}
+				for _, o := range objects {
+					t.Run(o.kind, func(t *testing.T) {
+						if isNilObject(o.obj) {
+							t.Skipf("SparkDriverCreator.Build does not produce the %s yet; golden for %s/%s is committed and ready", o.kind, ver, name)
+						}
+						compare(t, dir, o.file, o.obj, o.kind, "v1", vars)
+					})
+				}
 			})
 		}
 	}
@@ -156,7 +172,21 @@ func loadApplication(t *testing.T, name, ver string) *v1beta2.SparkApplication {
 
 	var app v1beta2.SparkApplication
 	require.NoError(t, yaml.Unmarshal([]byte(s), &app), "decode %s/application.yaml", name)
+	// The case YAML is version-agnostic; the matrix supplies the version, which
+	// drives the spark-version label the builder must emit.
+	app.Spec.SparkVersion = ver
 	return &app
+}
+
+// isNilObject reports whether obj is nil or a typed nil pointer. A nil field in
+// DriverResources arrives here boxed in an interface, so a plain obj == nil check
+// misses it — reflect is needed to see the nil pointer inside.
+func isNilObject(obj any) bool {
+	if obj == nil {
+		return true
+	}
+	v := reflect.ValueOf(obj)
+	return v.Kind() == reflect.Ptr && v.IsNil()
 }
 
 func readGolden(t *testing.T, dir, file string) map[string]any {
