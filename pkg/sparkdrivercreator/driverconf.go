@@ -323,6 +323,12 @@ func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverCon
 			c.sparkConf = map[string]string{}
 		}
 		addDriverSecretConf(c.sparkConf, driver)
+		// Typed secrets (GCPServiceAccount/HadoopDelegationToken) also inject a
+		// credential env var. Append it to the custom driver env so BasicDriver emits
+		// the pod env var and the spark.properties passthrough emits the driverEnv line
+		// (mirroring the operator's driverSecretOption). Lands after any driver.env
+		// entries, before SPARK_DRIVER_BIND_ADDRESS — matching Spark's env order.
+		c.environment = append(c.environment, driverSecretCredentialEnv(driver)...)
 	}
 	c.driverSecrets = parseDriverSecrets(c.sparkConf)
 	c.driverEnvSecrets, err = parseDriverEnvSecrets(c.sparkConf)

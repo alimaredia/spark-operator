@@ -18,6 +18,7 @@ package sparkdrivercreator
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -41,6 +42,46 @@ const (
 	secretVolumeNameSuffix = "-volume"
 )
 
+// Credential env for typed driver secrets. For the well-known secret types the
+// operator injects a spark.kubernetes.driverEnv.* conf pointing at the credential
+// file inside the secret's mount path (driverSecretOption in submission.go):
+// GCPServiceAccount -> GOOGLE_APPLICATION_CREDENTIALS=<path>/key.json,
+// HadoopDelegationToken -> HADOOP_TOKEN_FILE_LOCATION=<path>/hadoop.token. These
+// mirror the constants in pkg/common (kept local so this package stays free of
+// operator internals, as elsewhere here). BasicDriverFeatureStep surfaces the conf
+// as a driver env var and the spark.properties passthrough emits the driverEnv line.
+const (
+	envGoogleAppCredentials    = "GOOGLE_APPLICATION_CREDENTIALS"
+	gcpServiceAccountKeyFile   = "key.json"
+	envHadoopTokenFileLocation = "HADOOP_TOKEN_FILE_LOCATION"
+	hadoopDelegationTokenFile  = "hadoop.token"
+)
+
+// driverSecretCredentialEnv returns the credential env vars the operator injects for
+// typed driver secrets, in spec order. Generic secrets (and any unrecognized type)
+// contribute none — the secret is still mounted by MountSecretsFeatureStep, it just
+// gets no extra credential env. The returned vars are appended to the driver's custom
+// env (driverConf.environment), so they surface both as driver-container env and, via
+// the spark.properties passthrough, as spark.kubernetes.driverEnv.* lines.
+func driverSecretCredentialEnv(driver v1beta2.DriverSpec) []corev1.EnvVar {
+	var out []corev1.EnvVar
+	for _, secret := range driver.Secrets {
+		switch secret.Type {
+		case v1beta2.SecretTypeGCPServiceAccount:
+			out = append(out, corev1.EnvVar{
+				Name:  envGoogleAppCredentials,
+				Value: path.Join(secret.Path, gcpServiceAccountKeyFile),
+			})
+		case v1beta2.SecretTypeHadoopDelegationToken:
+			out = append(out, corev1.EnvVar{
+				Name:  envHadoopTokenFileLocation,
+				Value: path.Join(secret.Path, hadoopDelegationTokenFile),
+			})
+		}
+	}
+	return out
+}
+
 // addDriverSecretConf folds the typed driver secret fields (spec.driver.secrets,
 // spec.driver.envSecretKeyRefs) into the resolved SparkConf, exactly mirroring the
 // operator's driverSecretOption / EnvSecretKeyRefs translation to --conf (which
@@ -49,11 +90,11 @@ const (
 // these from the conf, just as they do for a submission that set them via sparkConf
 // directly. It is a no-op when the app references no secrets.
 //
-// NOTE: the GCPServiceAccount / HadoopDelegationToken secret types cause the
-// operator to also emit a spark.kubernetes.driverEnv.* conf pointing at the
-// credential file; only the base secrets conf is folded in here. Those types are a
-// documented follow-up (the oracle would flag them via a red test), so a case using
-// them is out of scope until then.
+// NOTE: this folds only the base secrets conf. The GCPServiceAccount /
+// HadoopDelegationToken secret types also cause the operator to emit a
+// spark.kubernetes.driverEnv.* conf pointing at the credential file; that is handled
+// by driverSecretCredentialEnv, which appends the corresponding driver env var (from
+// which the driverEnv conf line is derived by the spark.properties passthrough).
 func addDriverSecretConf(sparkConf map[string]string, driver v1beta2.DriverSpec) {
 	for _, secret := range driver.Secrets {
 		sparkConf[driverSecretsConfPrefix+secret.Name] = secret.Path

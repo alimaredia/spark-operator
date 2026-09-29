@@ -110,6 +110,17 @@ in the matrix:
   volume/mount ordered before the local-dir/conf ones; the secretKeyRef env var right
   after the base env) and `configmap.json` (the two secret confs).
 
+- **`sparkpi-secret-creds`** — typed driver secret **credential env**, the extra the
+  operator injects for well-known secret types on top of a normal secret mount
+  (`driverSecretOption`). A `GCPServiceAccount` secret adds
+  `GOOGLE_APPLICATION_CREDENTIALS=<path>/key.json`; a `HadoopDelegationToken` secret
+  adds `HADOOP_TOKEN_FILE_LOCATION=<path>/hadoop.token`. Each is a plain
+  `spark.kubernetes.driverEnv.*` conf, so `BasicDriverFeatureStep` surfaces it as a
+  driver env var (after the base env, before `SPARK_DRIVER_BIND_ADDRESS`) and it also
+  appears in `spark.properties`. The secrets are still mounted like any referenced
+  secret — no API object. No new golden file; the effect is in `driver-pod.json` (the
+  two credential env vars + the two secret volumes/mounts) and `configmap.json`.
+
 ## Running the tests
 
 Pure Go, no JVM required — reads the committed golden files:

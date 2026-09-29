@@ -1,0 +1,31 @@
+# Source-of-truth SparkApplication for the "sparkpi-secret-creds" oracle case.
+#
+# Models the typed driver secret credential env the operator injects on top of a
+# normal secret mount (driverSecretOption in submission.go). A GCPServiceAccount
+# secret adds GOOGLE_APPLICATION_CREDENTIALS=<path>/key.json; a HadoopDelegationToken
+# secret adds HADOOP_TOKEN_FILE_LOCATION=<path>/hadoop.token. Each is a plain
+# spark.kubernetes.driverEnv.* conf, so BasicDriverFeatureStep surfaces it as a
+# driver env var and it also appears in spark.properties. The secrets themselves are
+# still mounted like any referenced secret (no API object created). Keep in sync with
+# submit-args.txt.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: "__IMAGE__"
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: "__EXAMPLES_JAR__"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"
+  driver:
+    secrets:
+      - name: gcp-secret
+        path: /etc/gcp
+        secretType: GCPServiceAccount
+      - name: hadoop-secret
+        path: /etc/hadoop-token
+        secretType: HadoopDelegationToken
