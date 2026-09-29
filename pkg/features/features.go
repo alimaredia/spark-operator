@@ -50,6 +50,15 @@ const (
 	// alpha: v2.6.0
 	RestSubmitter featuregate.Feature = "RestSubmitter"
 
+	// NativeSubmitter enables the pure-Go, in-operator submission strategy: the
+	// operator builds the driver resources itself (pkg/sparkdrivercreator) and
+	// applies them with the Kubernetes API, with no spark-submit, no JVM, and no
+	// external submitter service. Mutually exclusive with RestSubmitter.
+	//
+	// owner: @amaredia
+	// alpha: v2.6.0
+	NativeSubmitter featuregate.Feature = "NativeSubmitter"
+
 	// DefaultTimeToLive enables applying an operator-configured default TTL to
 	// terminated SparkApplications that do not set spec.timeToLiveSeconds. The
 	// value is used only for the cleanup decision (a runtime fallback) and never
@@ -100,6 +109,8 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	LoadSparkDefaults: {Default: false, PreRelease: featuregate.Alpha},
 
 	RestSubmitter: {Default: false, PreRelease: featuregate.Alpha},
+
+	NativeSubmitter: {Default: false, PreRelease: featuregate.Alpha},
 
 	DefaultTimeToLive: {Default: false, PreRelease: featuregate.Alpha},
 }

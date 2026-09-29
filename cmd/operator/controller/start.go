@@ -186,6 +186,10 @@ func NewStartCommand() *cobra.Command {
 				return fmt.Errorf("invalid value %q for --scheduled-spark-application-timestamp-precision, valid values: %v", scheduledSparkApplicationTimestampPrecision, validPrecisions)
 			}
 
+			if features.Enabled(features.NativeSubmitter) && features.Enabled(features.RestSubmitter) {
+				return fmt.Errorf("the NativeSubmitter and RestSubmitter feature gates are mutually exclusive; enable at most one")
+			}
+
 			if features.Enabled(features.RestSubmitter) {
 				if submitterServiceURL == "" {
 					return fmt.Errorf("--submitter-service-url is required when RestSubmitter feature gate is enabled")
@@ -417,7 +421,7 @@ func start() {
 
 	ctx := ctrl.SetupSignalHandler()
 
-	sparkSubmitter, err := newSparkSubmitter(ctx)
+	sparkSubmitter, err := newSparkSubmitter(ctx, mgr.GetClient())
 	if err != nil {
 		logger.Error(err, "Failed to create spark submitter")
 		os.Exit(1)
@@ -607,7 +611,12 @@ func newSparkConnectReconcilerOptions() sparkconnect.Options {
 	return options
 }
 
-func newSparkSubmitter(ctx context.Context) (sparkapplication.SparkApplicationSubmitter, error) {
+func newSparkSubmitter(ctx context.Context, c client.Client) (sparkapplication.SparkApplicationSubmitter, error) {
+	if features.Enabled(features.NativeSubmitter) {
+		logger.Info("Using native (pure-Go, in-operator) submitter")
+		return sparkapplication.NewNativeSparkSubmitter(c), nil
+	}
+
 	if !features.Enabled(features.RestSubmitter) {
 		return &sparkapplication.SparkSubmitter{}, nil
 	}
