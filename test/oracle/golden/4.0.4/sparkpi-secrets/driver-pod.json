@@ -92,12 +92,12 @@
             "name": "my-secret-volume"
           },
           {
-            "mountPath": "/var/data/__LOCAL_DIR__",
-            "name": "spark-local-dir-1"
-          },
-          {
             "mountPath": "/opt/spark/conf",
             "name": "spark-conf-volume-driver"
+          },
+          {
+            "mountPath": "/var/data/__LOCAL_DIR__",
+            "name": "spark-local-dir-1"
           }
         ]
       }
@@ -111,10 +111,6 @@
         }
       },
       {
-        "emptyDir": {},
-        "name": "spark-local-dir-1"
-      },
-      {
         "configMap": {
           "items": [
             {
@@ -126,6 +122,10 @@
           "name": "spark-drv-__CM_ID__-conf-map"
         },
         "name": "spark-conf-volume-driver"
+      },
+      {
+        "emptyDir": {},
+        "name": "spark-local-dir-1"
       }
     ]
   }

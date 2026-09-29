@@ -79,8 +79,16 @@
         },
         "volumeMounts": [
           {
-            "mountPath": "/opt/spark/pod-template",
-            "name": "pod-template-volume"
+            "mountPath": "/cache",
+            "name": "cache"
+          },
+          {
+            "mountPath": "/host-data",
+            "name": "host"
+          },
+          {
+            "mountPath": "/shared",
+            "name": "shared"
           },
           {
             "mountPath": "/opt/spark/conf",
@@ -96,16 +104,25 @@
     "restartPolicy": "Never",
     "volumes": [
       {
-        "configMap": {
-          "items": [
-            {
-              "key": "podspec-configmap-key",
-              "path": "pod-spec-template.yml"
-            }
-          ],
-          "name": "__PREFIX__-driver-podspec-conf-map"
+        "emptyDir": {
+          "medium": "Memory",
+          "sizeLimit": "512Mi"
         },
-        "name": "pod-template-volume"
+        "name": "cache"
+      },
+      {
+        "hostPath": {
+          "path": "/tmp/host",
+          "type": "Directory"
+        },
+        "name": "host"
+      },
+      {
+        "name": "shared",
+        "nfs": {
+          "path": "/exported",
+          "server": "nfs.example.com"
+        }
       },
       {
         "configMap": {

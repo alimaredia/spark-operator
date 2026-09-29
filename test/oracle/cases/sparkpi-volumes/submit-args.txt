@@ -1,0 +1,41 @@
+# spark-submit args for the "sparkpi-volumes" oracle case (one token per line).
+# Lines starting with # and blank lines are ignored.
+# __RECORDER__ / __IMAGE__ / __EXAMPLES_JAR__ are substituted by regen.sh.
+#
+# Non-PVC driver volume types (emptyDir, hostPath, nfs). None create an additional
+# object — each only adds a pod volume + driver mount (Spark's
+# MountVolumesFeatureStep). Names sort as cache, host, shared. Keep in sync with
+# application.yaml.
+--master
+k8s://http://__RECORDER__
+--deploy-mode
+cluster
+--name
+sparkpi
+--class
+org.apache.spark.examples.SparkPi
+--conf
+spark.kubernetes.namespace=default
+--conf
+spark.kubernetes.container.image=__IMAGE__
+--conf
+spark.kubernetes.submission.waitAppCompletion=false
+--conf
+spark.kubernetes.driver.volumes.emptyDir.cache.mount.path=/cache
+--conf
+spark.kubernetes.driver.volumes.emptyDir.cache.options.medium=Memory
+--conf
+spark.kubernetes.driver.volumes.emptyDir.cache.options.sizeLimit=512Mi
+--conf
+spark.kubernetes.driver.volumes.hostPath.host.mount.path=/host-data
+--conf
+spark.kubernetes.driver.volumes.hostPath.host.options.path=/tmp/host
+--conf
+spark.kubernetes.driver.volumes.hostPath.host.options.type=Directory
+--conf
+spark.kubernetes.driver.volumes.nfs.shared.mount.path=/shared
+--conf
+spark.kubernetes.driver.volumes.nfs.shared.options.path=/exported
+--conf
+spark.kubernetes.driver.volumes.nfs.shared.options.server=nfs.example.com
+__EXAMPLES_JAR__

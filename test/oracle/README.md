@@ -85,6 +85,18 @@ in the matrix:
   case exercises. fabric8 serializes the driver-volume mount/source's zero-valued
   `readOnly`/`subPath`/`subPathExpr` explicitly (Go's typed structs omit them), so
   normalization strips those zero values to keep the two sides comparable.
+- **`sparkpi-volumes`** — the non-PVC driver volume types (`emptyDir`, `hostPath`,
+  `nfs`) that `MountVolumesFeatureStep` supports. Unlike an on-demand PVC, none of
+  these create an additional object — each is purely a driver-pod mutation (a pod
+  volume + a container mount). One volume of each type is exercised in a single case
+  (names `cache`/`host`/`shared`). Spark derives its driver volumes from an
+  **unordered Scala Set**, so the pod body's volume/mount order is a hash order the
+  pure-Go builder cannot reproduce (it emits a deterministic name-sorted order);
+  normalization sorts `spec.volumes` and each container's `volumeMounts` by name on
+  both sides, so the comparison is over the *set* of volumes/mounts (order carries no
+  meaning to Kubernetes). As with `sparkpi-pvc`, fabric8 emits the mounts'
+  zero-valued `readOnly`/`subPath`/`subPathExpr` explicitly and normalization strips
+  them. Effect is entirely in `driver-pod.json`.
 - **`sparkpi-secrets`** — referenced secrets, pinning `MountSecretsFeatureStep` and
   `EnvSecretsFeatureStep`. Neither creates an API object (the Secret must pre-exist);
   both only mutate the driver pod. `spec.driver.secrets` → a pod volume
@@ -149,6 +161,14 @@ ConfigMap id, local dir, submitTime, properties date, master URL, SPARK_USER,
 and owner-reference uid — the last two are host/post-create values the pure-Go
 builder cannot reproduce). The golden object files are byte-identical across
 independent `spark-submit` runs.
+
+Two structural normalizations also run on driver pods: fabric8's explicit
+zero-valued volume-mount fields (`readOnly:false`/`subPath:""`/`subPathExpr:""`) and
+PVC-source `readOnly:false` are stripped to match Go's `omitempty`; and
+`spec.volumes` and each container's `volumeMounts` are sorted by name, because Spark
+builds its driver volumes from an unordered Scala Set (a hash order the pure-Go
+builder emits name-sorted instead). Sorting is applied identically to both sides, so
+volume/mount comparison is over the set of entries.
 
 The per-submission **resource prefix** (`<appName>-<16hex>`) is extracted from the
 driver **Service** name (`<prefix>-driver-svc`), not the pod name: when a case

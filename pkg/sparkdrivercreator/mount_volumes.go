@@ -33,20 +33,30 @@ import (
 const (
 	driverVolumesConfPrefix = "spark.kubernetes.driver.volumes."
 
-	volumeTypePVC = "persistentVolumeClaim"
+	// Supported volume types (the leading "<type>" segment of the conf key).
+	volumeTypePVC      = "persistentVolumeClaim"
+	volumeTypeEmptyDir = "emptyDir"
+	volumeTypeHostPath = "hostPath"
+	volumeTypeNFS      = "nfs"
 
-	// mount.* / options.* leaf keys.
+	// mount.* leaf keys, shared by every volume type.
 	volMountPathKey     = "mount.path"
 	volMountReadOnlyKey = "mount.readOnly"
 	volMountSubPathKey  = "mount.subPath"
 	volMountSubPathExpr = "mount.subPathExpr"
-	volOptClaimNameKey  = "options.claimName"
-	volOptStorageClass  = "options.storageClass"
-	volOptSizeLimitKey  = "options.sizeLimit"
+
+	// options.* leaf keys, per type.
+	volOptClaimNameKey = "options.claimName"
+	volOptStorageClass = "options.storageClass"
+	volOptSizeLimitKey = "options.sizeLimit"
+	volOptMediumKey    = "options.medium"
+	volOptPathKey      = "options.path"
+	volOptTypeKey      = "options.type"
+	volOptServerKey    = "options.server"
 
 	// pvcOnDemand is the sentinel claimName that asks Spark to create the PVC.
 	pvcOnDemand = "OnDemand"
-	// pvcNameInfix/Suffix build the generated driver PVC name
+	// pvcNameInfix builds the generated driver PVC name
 	// "<resourceNamePrefix>-driver-pvc-<i>" (MountVolumesFeatureStep).
 	pvcNameInfix = "-driver-pvc-"
 
@@ -59,9 +69,10 @@ const (
 	confLegacyPVCAccess  = "spark.kubernetes.legacy.useReadWriteOnceAccessMode"
 )
 
-// driverVolume is a resolved driver volume spec. Only persistentVolumeClaim is
-// ported so far (the reproducible on-demand PVC path); other volume types return
-// an error from parsing rather than being silently dropped.
+// driverVolume is a resolved driver volume spec: the shared mount fields plus the
+// per-type pod volume source. persistentVolumeClaim, emptyDir, hostPath and nfs are
+// supported (the reproducible subset); any other type errors out of parsing rather
+// than being silently dropped.
 type driverVolume struct {
 	name             string
 	mountPath        string
@@ -69,20 +80,23 @@ type driverVolume struct {
 	mountSubPath     string
 	mountSubPathExpr string
 
-	// claimName is the resolved PVC name (OnDemand already substituted).
-	claimName string
-	// createPVC is true when Spark would create the PVC object (claimName was
-	// OnDemand and both storageClass and sizeLimit are set).
+	// source is the pod volume source (built per type in parseDriverVolumes).
+	source corev1.VolumeSource
+
+	// PVC-object creation (persistentVolumeClaim + OnDemand only). createPVC is true
+	// when Spark would create the PVC object (claimName was OnDemand and both
+	// storageClass and sizeLimit are set); the remaining fields populate it.
 	createPVC    bool
+	claimName    string
 	storageClass string
 	sizeLimit    string
 }
 
-// parseDriverVolumes resolves the driver.volumes.* conf into ordered volume
-// specs, mirroring KubernetesVolumeUtils.parseVolumesWithPrefix +
-// MountVolumesFeatureStep's OnDemand substitution. Specs are sorted by volume
-// name for a deterministic order (Spark iterates an unordered Set, so multi-volume
-// ordering is only well-defined here for a single volume — enough for the oracle).
+// parseDriverVolumes resolves the driver.volumes.* conf into ordered volume specs,
+// mirroring KubernetesVolumeUtils.parseVolumesWithPrefix + MountVolumesFeatureStep's
+// per-type volume construction. Specs are sorted by volume name for a deterministic
+// order (Spark iterates an unordered Set, so multi-volume ordering is only
+// well-defined here once names are sorted — the oracle relies on this).
 func parseDriverVolumes(sparkConf map[string]string, resourceNamePrefix string) ([]driverVolume, error) {
 	// Group leaf keys by "<type>.<name>".
 	type key struct{ typ, name string }
@@ -113,41 +127,123 @@ func parseDriverVolumes(sparkConf map[string]string, resourceNamePrefix string) 
 	out := make([]driverVolume, 0, len(order))
 	for i, gk := range order {
 		props := groups[gk]
-		if gk.typ != volumeTypePVC {
-			return nil, fmt.Errorf("driver volume %q has type %q; only %q is supported by the native builder",
-				gk.name, gk.typ, volumeTypePVC)
-		}
 		mountPath, ok := props[volMountPathKey]
 		if !ok || mountPath == "" {
 			return nil, fmt.Errorf("driver volume %q: missing %s", gk.name, volMountPathKey)
 		}
-		claimTemplate, ok := props[volOptClaimNameKey]
-		if !ok || claimTemplate == "" {
-			return nil, fmt.Errorf("driver volume %q: missing %s", gk.name, volOptClaimNameKey)
-		}
-		storageClass := props[volOptStorageClass]
-		sizeLimit := props[volOptSizeLimitKey]
-
-		// OnDemand -> "<prefix>-driver-pvc-<i>" (i is the index across all driver
-		// volumes, matching MountVolumesFeatureStep).
-		claimName := strings.ReplaceAll(claimTemplate, pvcOnDemand,
-			fmt.Sprintf("%s%s%d", resourceNamePrefix, pvcNameInfix, i))
-
-		out = append(out, driverVolume{
+		v := driverVolume{
 			name:             gk.name,
 			mountPath:        mountPath,
 			mountReadOnly:    props[volMountReadOnlyKey] == "true",
 			mountSubPath:     props[volMountSubPathKey],
 			mountSubPathExpr: props[volMountSubPathExpr],
-			claimName:        claimName,
-			// A PVC object is created only when it is OnDemand AND both storageClass
-			// and size are set (MountVolumesFeatureStep gate).
-			createPVC:    claimTemplate == pvcOnDemand && storageClass != "" && sizeLimit != "",
-			storageClass: storageClass,
-			sizeLimit:    sizeLimit,
-		})
+		}
+
+		switch gk.typ {
+		case volumeTypePVC:
+			if err := resolvePVCVolume(&v, props, resourceNamePrefix, i); err != nil {
+				return nil, err
+			}
+		case volumeTypeEmptyDir:
+			if err := resolveEmptyDirVolume(&v, props); err != nil {
+				return nil, err
+			}
+		case volumeTypeHostPath:
+			if err := resolveHostPathVolume(&v, props); err != nil {
+				return nil, err
+			}
+		case volumeTypeNFS:
+			if err := resolveNFSVolume(&v, props); err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("driver volume %q has unsupported type %q", gk.name, gk.typ)
+		}
+
+		out = append(out, v)
 	}
 	return out, nil
+}
+
+// resolvePVCVolume fills in the persistentVolumeClaim source and, for OnDemand
+// claims with a storageClass and size, the PVC-object fields. i is the volume's
+// index across all driver volumes, matching MountVolumesFeatureStep's substitution.
+func resolvePVCVolume(v *driverVolume, props map[string]string, resourceNamePrefix string, i int) error {
+	claimTemplate, ok := props[volOptClaimNameKey]
+	if !ok || claimTemplate == "" {
+		return fmt.Errorf("driver volume %q: missing %s", v.name, volOptClaimNameKey)
+	}
+	storageClass := props[volOptStorageClass]
+	sizeLimit := props[volOptSizeLimitKey]
+
+	// OnDemand -> "<prefix>-driver-pvc-<i>".
+	claimName := strings.ReplaceAll(claimTemplate, pvcOnDemand,
+		fmt.Sprintf("%s%s%d", resourceNamePrefix, pvcNameInfix, i))
+
+	v.source = corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+			ClaimName: claimName,
+			ReadOnly:  v.mountReadOnly,
+		},
+	}
+	v.claimName = claimName
+	v.storageClass = storageClass
+	v.sizeLimit = sizeLimit
+	// A PVC object is created only when it is OnDemand AND both storageClass and
+	// size are set (MountVolumesFeatureStep gate).
+	v.createPVC = claimTemplate == pvcOnDemand && storageClass != "" && sizeLimit != ""
+	return nil
+}
+
+// resolveEmptyDirVolume fills in the emptyDir source. medium and sizeLimit are both
+// optional; an unset medium yields the default ("") which serializes as an empty
+// emptyDir object, matching Spark's medium.getOrElse("").
+func resolveEmptyDirVolume(v *driverVolume, props map[string]string) error {
+	src := &corev1.EmptyDirVolumeSource{}
+	if medium := props[volOptMediumKey]; medium != "" {
+		src.Medium = corev1.StorageMedium(medium)
+	}
+	if sizeLimit := props[volOptSizeLimitKey]; sizeLimit != "" {
+		q, err := resource.ParseQuantity(sizeLimit)
+		if err != nil {
+			return fmt.Errorf("driver volume %q: invalid %s %q: %w", v.name, volOptSizeLimitKey, sizeLimit, err)
+		}
+		src.SizeLimit = &q
+	}
+	v.source = corev1.VolumeSource{EmptyDir: src}
+	return nil
+}
+
+// resolveHostPathVolume fills in the hostPath source. path is required; type is
+// optional (unset means no pre-mount checks, matching Spark's default of "").
+func resolveHostPathVolume(v *driverVolume, props map[string]string) error {
+	path := props[volOptPathKey]
+	if path == "" {
+		return fmt.Errorf("driver volume %q: missing %s", v.name, volOptPathKey)
+	}
+	src := &corev1.HostPathVolumeSource{Path: path}
+	if t := props[volOptTypeKey]; t != "" {
+		ht := corev1.HostPathType(t)
+		src.Type = &ht
+	}
+	v.source = corev1.VolumeSource{HostPath: src}
+	return nil
+}
+
+// resolveNFSVolume fills in the nfs source. Both path and server are required.
+func resolveNFSVolume(v *driverVolume, props map[string]string) error {
+	path := props[volOptPathKey]
+	if path == "" {
+		return fmt.Errorf("driver volume %q: missing %s", v.name, volOptPathKey)
+	}
+	server := props[volOptServerKey]
+	if server == "" {
+		return fmt.Errorf("driver volume %q: missing %s", v.name, volOptServerKey)
+	}
+	v.source = corev1.VolumeSource{
+		NFS: &corev1.NFSVolumeSource{Path: path, Server: server},
+	}
+	return nil
 }
 
 // mountVolumesFeatureStep is the pure-Go port of Spark's MountVolumesFeatureStep:
@@ -179,13 +275,8 @@ func (s *mountVolumesFeatureStep) configurePod(in sparkPod) sparkPod {
 			SubPathExpr: v.mountSubPathExpr,
 		})
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-			Name: v.name,
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: v.claimName,
-					ReadOnly:  v.mountReadOnly,
-				},
-			},
+			Name:         v.name,
+			VolumeSource: v.source,
 		})
 	}
 
@@ -196,7 +287,8 @@ func (s *mountVolumesFeatureStep) configurePod(in sparkPod) sparkPod {
 // MountVolumesFeatureStep would create as additional (post-pod, owner-referenced)
 // resources — one per driver volume whose claimName was OnDemand with a
 // storageClass and size. The PVC carries no namespace in its body (Spark omits it,
-// like the Service) and the spark-app-selector label.
+// like the Service) and the spark-app-selector label. Non-PVC volume types create
+// no object, so they never appear here.
 func buildDriverPVCs(conf *driverConf) []*corev1.PersistentVolumeClaim {
 	var pvcs []*corev1.PersistentVolumeClaim
 	for _, v := range conf.driverVolumes {

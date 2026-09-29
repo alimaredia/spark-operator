@@ -42,6 +42,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -136,6 +137,12 @@ func Normalize(raw []byte, vars Vars) ([]byte, error) {
 	// which serializes zero-valued readOnly/subPath/subPathExpr explicitly; Go's
 	// typed structs omit them (omitempty). Drop those zero values so the two agree.
 	normalizeVolumeZeroValues(obj)
+	// Spark derives its driver volumes from an unordered Scala Set, so the pod's
+	// volume/mount order is a hash order the pure-Go builder cannot (and should not)
+	// reproduce; the builder emits a deterministic name-sorted order instead. Sort
+	// both sides by name so the comparison is over the set of volumes/mounts, which
+	// is all that is semantically meaningful to Kubernetes.
+	sortVolumesAndMounts(obj)
 
 	// Re-serialize (canonical, sorted keys) then do string-level substitution so
 	// identifiers are replaced everywhere — including inside spark.properties.
@@ -297,6 +304,48 @@ func normalizeVolumeZeroValues(obj map[string]any) {
 			delete(pvc, "readOnly")
 		}
 	}
+}
+
+// sortVolumesAndMounts sorts a driver pod's spec.volumes and each container's
+// volumeMounts by name. Spark builds driver volumes from an unordered Set (see
+// KubernetesVolumeUtils.getVolumeTypesAndNames), so a multi-volume submission's
+// pod-body order is a Scala hash order — deterministic across runs but not
+// reproducible by the pure-Go builder, which emits volumes name-sorted. Sorting
+// both sides makes the comparison order-independent (volume/mount order carries no
+// meaning to Kubernetes). Entries without a string name sort last, preserving their
+// relative order. Non-pod objects have no spec.volumes/containers, so this is a
+// no-op for them.
+func sortVolumesAndMounts(obj map[string]any) {
+	spec, _ := obj["spec"].(map[string]any)
+	if spec == nil {
+		return
+	}
+	if volumes, _ := spec["volumes"].([]any); volumes != nil {
+		sortByName(volumes)
+	}
+	containers, _ := spec["containers"].([]any)
+	for _, c := range containers {
+		container, _ := c.(map[string]any)
+		if container == nil {
+			continue
+		}
+		if mounts, _ := container["volumeMounts"].([]any); mounts != nil {
+			sortByName(mounts)
+		}
+	}
+}
+
+// sortByName stably sorts a slice of JSON objects by their "name" string field.
+func sortByName(items []any) {
+	name := func(x any) string {
+		m, _ := x.(map[string]any)
+		if m == nil {
+			return ""
+		}
+		s, _ := m["name"].(string)
+		return s
+	}
+	sort.SliceStable(items, func(i, j int) bool { return name(items[i]) < name(items[j]) })
 }
 
 func stripVolatile(obj map[string]any) {

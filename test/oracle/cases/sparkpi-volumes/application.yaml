@@ -1,0 +1,39 @@
+# Source-of-truth SparkApplication for the "sparkpi-volumes" oracle case.
+#
+# Models the non-PVC driver volume types Spark's MountVolumesFeatureStep supports:
+# emptyDir, hostPath, and nfs. Unlike an on-demand PVC, none of these create an
+# additional API object — each is purely a driver-pod mutation (a pod volume plus a
+# container mount). The typed CRD volume source can express these, but this case
+# drives them via spec.sparkConf passthrough so the raw
+# spark.kubernetes.driver.volumes.* keys are pinned directly against stock
+# spark-submit.
+#
+# Three volumes with names chosen to sort deterministically (cache, host, shared):
+# Spark iterates an unordered Set, so the native builder sorts driver volumes by
+# name — the oracle relies on that order being cache, host, shared. Keep in sync
+# with submit-args.txt.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: "__IMAGE__"
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: "__EXAMPLES_JAR__"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"
+    # emptyDir (medium + sizeLimit both optional; both set here)
+    spark.kubernetes.driver.volumes.emptyDir.cache.mount.path: /cache
+    spark.kubernetes.driver.volumes.emptyDir.cache.options.medium: Memory
+    spark.kubernetes.driver.volumes.emptyDir.cache.options.sizeLimit: 512Mi
+    # hostPath (path required; type optional, set here)
+    spark.kubernetes.driver.volumes.hostPath.host.mount.path: /host-data
+    spark.kubernetes.driver.volumes.hostPath.host.options.path: /tmp/host
+    spark.kubernetes.driver.volumes.hostPath.host.options.type: Directory
+    # nfs (path + server both required)
+    spark.kubernetes.driver.volumes.nfs.shared.mount.path: /shared
+    spark.kubernetes.driver.volumes.nfs.shared.options.path: /exported
+    spark.kubernetes.driver.volumes.nfs.shared.options.server: nfs.example.com
