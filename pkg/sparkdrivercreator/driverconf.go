@@ -170,6 +170,13 @@ type driverConf struct {
 	podSpecConfigMapName         string
 	execPodTemplateYAML          string
 	execPodTemplateContainerName string
+
+	// Driver volumes (spark.kubernetes.driver.volumes.*), resolved once in Spark's
+	// order. Today only persistentVolumeClaim is ported (the on-demand PVC path);
+	// see mount_volumes.go. pvcAccessMode is the access mode on-demand PVCs get
+	// (ReadWriteOncePod unless the legacy conf flips it to ReadWriteOnce).
+	driverVolumes []driverVolume
+	pvcAccessMode corev1.PersistentVolumeAccessMode
 }
 
 // newDriverConf resolves a SparkApplication into a driverConf, applying Spark's
@@ -284,6 +291,19 @@ func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverCon
 		c.hasExecPodTemplate = true
 		c.execPodTemplateYAML = string(data)
 		c.execPodTemplateContainerName = defaultExecutorContainerNm
+	}
+
+	// Resolve driver volumes from conf, mirroring MountVolumesFeatureStep. Only
+	// on-demand PVCs are ported so far; other volume types error out rather than
+	// being silently dropped.
+	volumes, err := parseDriverVolumes(c.sparkConf, resourceNamePrefix)
+	if err != nil {
+		return nil, err
+	}
+	c.driverVolumes = volumes
+	c.pvcAccessMode = pvcAccessModeDefault
+	if c.sparkConf[confLegacyPVCAccess] == "true" {
+		c.pvcAccessMode = pvcAccessModeLegacy
 	}
 	return c, nil
 }

@@ -37,6 +37,7 @@ golden/<version>/<case>/
   configmap.json
   service.json
   podspec-configmap.json  executor pod-template ConfigMap — only for pod-template cases
+  persistentvolumeclaim.json  on-demand driver PVC — only for driver-volume cases
   raw/, vars.json         intermediate capture artifacts — gitignored
 internal/oraclenorm/      shared normalization (golden + Go output use the same)
 cmd/oraclegen/            raw captures -> normalized golden files
@@ -73,6 +74,17 @@ in the matrix:
   them from the golden. The builder consumes the same executor template object via
   `BuildOptions.ExecutorPodTemplate`; cases without a template produce no 4th
   object.
+- **`sparkpi-pvc`** — a driver **on-demand PersistentVolumeClaim**, pinning Spark's
+  `MountVolumesFeatureStep`. When a driver volume sets all of
+  `options.claimName=OnDemand`, `options.storageClass`, and `options.sizeLimit`,
+  spark-submit substitutes `OnDemand` → `<prefix>-driver-pvc-<i>`, mounts the volume
+  on the driver (first in the volume list, before the local-dir and conf volumes),
+  and creates a **5th object**: the PVC (golden `persistentvolumeclaim.json`), owned
+  by the driver pod. The typed CRD volume source can only carry `claimName`+`readOnly`,
+  so on-demand PVCs are expressible only via `spec.sparkConf` passthrough — which this
+  case exercises. fabric8 serializes the driver-volume mount/source's zero-valued
+  `readOnly`/`subPath`/`subPathExpr` explicitly (Go's typed structs omit them), so
+  normalization strips those zero values to keep the two sides comparable.
 
 ## Running the tests
 

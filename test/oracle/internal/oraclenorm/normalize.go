@@ -132,6 +132,10 @@ func Normalize(raw []byte, vars Vars) ([]byte, error) {
 	// the pure-Go builder leaves it unset for the submitter to fill). Pin it so
 	// both sides agree.
 	normalizeOwnerReferenceUIDs(obj)
+	// MountVolumesFeatureStep builds its driver-volume mounts/sources with fabric8,
+	// which serializes zero-valued readOnly/subPath/subPathExpr explicitly; Go's
+	// typed structs omit them (omitempty). Drop those zero values so the two agree.
+	normalizeVolumeZeroValues(obj)
 
 	// Re-serialize (canonical, sorted keys) then do string-level substitution so
 	// identifiers are replaced everywhere — including inside spark.properties.
@@ -239,6 +243,59 @@ func normalizeOwnerReferenceUIDs(obj map[string]any) {
 			continue
 		}
 		ref["uid"] = PlaceholderOwnerUID
+	}
+}
+
+// normalizeVolumeZeroValues drops fabric8's explicit zero values from a driver
+// pod's volume mounts and PVC volume sources so they match Go's omitempty output:
+//   - container volumeMounts: readOnly:false, subPath:"", subPathExpr:""
+//   - volumes[].persistentVolumeClaim: readOnly:false
+//
+// Only zero values are removed (a real readOnly:true or non-empty subPath is
+// preserved), and only these keys — so mounts that never carried them (local-dir,
+// conf) are unaffected. Non-pod objects have no spec.containers/volumes, so this is
+// a no-op for them.
+func normalizeVolumeZeroValues(obj map[string]any) {
+	spec, _ := obj["spec"].(map[string]any)
+	if spec == nil {
+		return
+	}
+	containers, _ := spec["containers"].([]any)
+	for _, c := range containers {
+		container, _ := c.(map[string]any)
+		if container == nil {
+			continue
+		}
+		mounts, _ := container["volumeMounts"].([]any)
+		for _, m := range mounts {
+			mount, _ := m.(map[string]any)
+			if mount == nil {
+				continue
+			}
+			if ro, ok := mount["readOnly"].(bool); ok && !ro {
+				delete(mount, "readOnly")
+			}
+			if sp, ok := mount["subPath"].(string); ok && sp == "" {
+				delete(mount, "subPath")
+			}
+			if spe, ok := mount["subPathExpr"].(string); ok && spe == "" {
+				delete(mount, "subPathExpr")
+			}
+		}
+	}
+	volumes, _ := spec["volumes"].([]any)
+	for _, v := range volumes {
+		volume, _ := v.(map[string]any)
+		if volume == nil {
+			continue
+		}
+		pvc, _ := volume["persistentVolumeClaim"].(map[string]any)
+		if pvc == nil {
+			continue
+		}
+		if ro, ok := pvc["readOnly"].(bool); ok && !ro {
+			delete(pvc, "readOnly")
+		}
 	}
 }
 

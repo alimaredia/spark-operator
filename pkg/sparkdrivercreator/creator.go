@@ -76,6 +76,11 @@ type DriverResources struct {
 	// PodTemplateConfigMapStep creates. It is nil unless the submission carries an
 	// executor pod template (BuildOptions.ExecutorPodTemplate).
 	PodSpecConfigMap *corev1.ConfigMap
+	// PersistentVolumeClaims are the on-demand driver PVCs Spark's
+	// MountVolumesFeatureStep creates and owns (via the driver pod). Empty unless a
+	// driver volume requests an on-demand PVC. Like the Service/ConfigMap, each is
+	// applied after the driver pod exists and carries the driver pod as owner.
+	PersistentVolumeClaims []*corev1.PersistentVolumeClaim
 }
 
 // BuildOptions carries submit-time inputs the operator supplies out-of-band —
@@ -121,6 +126,7 @@ func (c *SparkDriverCreator) Build(app *v1beta2.SparkApplication, opts BuildOpti
 	if conf.hasExecPodTemplate {
 		res.PodSpecConfigMap = buildPodSpecConfigMap(conf)
 	}
+	res.PersistentVolumeClaims = buildDriverPVCs(conf)
 	return res, nil
 }
 
@@ -132,6 +138,10 @@ func buildDriverPod(conf *driverConf) *corev1.Pod {
 	steps := []featureStep{
 		newBasicDriverFeatureStep(conf),
 		newDriverKubernetesCredentialsFeatureStep(conf),
+		// MountVolumesFeatureStep runs before PodTemplateConfigMapStep and
+		// LocalDirsFeatureStep in Spark's feature order, so driver-volume mounts
+		// precede the pod-template and local-dir ones. No-op without driver volumes.
+		newMountVolumesFeatureStep(conf),
 		// PodTemplateConfigMapStep runs before LocalDirsFeatureStep in Spark's
 		// feature order, so the pod-template volume/mount precede the local-dir
 		// ones. It is a no-op when there is no executor template.

@@ -67,6 +67,7 @@ var goldenObjectFiles = []goldenObject{
 	{kind: "ConfigMap", file: "configmap.json"},
 	{kind: "Service", file: "service.json"},
 	{kind: "ConfigMap", file: "podspec-configmap.json", optional: true},
+	{kind: "PersistentVolumeClaim", file: "persistentvolumeclaim.json", optional: true},
 }
 
 func imageFor(v string) string { return "spark:" + v }
@@ -159,6 +160,7 @@ func TestDriverSpecMatchesOracle(t *testing.T) {
 					{"ConfigMap", "configmap.json", res.ConfigMap},
 					{"Service", "service.json", res.Service},
 					{"ConfigMap", "podspec-configmap.json", res.PodSpecConfigMap},
+					{"PersistentVolumeClaim", "persistentvolumeclaim.json", firstPVC(res.PersistentVolumeClaims)},
 				}
 				for _, o := range objects {
 					t.Run(o.kind, func(t *testing.T) {
@@ -220,6 +222,17 @@ func loadExecutorPodTemplate(t *testing.T, name string) *corev1.PodTemplateSpec 
 	var tpl corev1.PodTemplateSpec
 	require.NoError(t, yaml.Unmarshal(raw, &tpl), "decode %s/executor-pod-template.yaml", name)
 	return &tpl
+}
+
+// firstPVC returns the first driver PVC, or a typed nil when there are none, so
+// the objects table skips (rather than fails) for cases without an on-demand PVC.
+// The oracle cases exercise at most one driver volume, so comparing the first PVC
+// is sufficient; multi-PVC ordering is non-deterministic in Spark and out of scope.
+func firstPVC(pvcs []*corev1.PersistentVolumeClaim) *corev1.PersistentVolumeClaim {
+	if len(pvcs) == 0 {
+		return nil
+	}
+	return pvcs[0]
 }
 
 // isNilObject reports whether obj is nil or a typed nil pointer. A nil field in

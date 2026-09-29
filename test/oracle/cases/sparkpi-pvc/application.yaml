@@ -1,0 +1,29 @@
+# Source-of-truth SparkApplication for the "sparkpi-pvc" oracle case.
+#
+# Models a driver on-demand PersistentVolumeClaim. spark-submit creates a PVC
+# (Spark's MountVolumesFeatureStep) only when a driver volume sets all of
+# options.claimName=OnDemand, options.storageClass, and options.sizeLimit. The
+# typed CRD volume source (spec.volumes[].persistentVolumeClaim) can only carry
+# claimName+readOnly, so the operator can express on-demand PVCs solely via
+# spec.sparkConf passthrough — which is what this case exercises.
+#
+# Spark substitutes OnDemand -> "<resourceNamePrefix>-driver-pvc-<i>" (i is the
+# volume's index across all driver volumes), builds an immutable-less PVC owned by
+# the driver pod, and mounts it on the driver. Keep in sync with submit-args.txt.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: "__IMAGE__"
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: "__EXAMPLES_JAR__"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"
+    spark.kubernetes.driver.volumes.persistentVolumeClaim.data.mount.path: /data
+    spark.kubernetes.driver.volumes.persistentVolumeClaim.data.options.claimName: OnDemand
+    spark.kubernetes.driver.volumes.persistentVolumeClaim.data.options.storageClass: standard
+    spark.kubernetes.driver.volumes.persistentVolumeClaim.data.options.sizeLimit: 1Gi

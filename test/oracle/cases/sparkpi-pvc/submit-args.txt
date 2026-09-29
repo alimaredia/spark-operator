@@ -1,0 +1,31 @@
+# spark-submit args for the "sparkpi-pvc" oracle case (one token per line).
+# Lines starting with # and blank lines are ignored.
+# __RECORDER__ / __IMAGE__ / __EXAMPLES_JAR__ are substituted by regen.sh.
+#
+# Driver on-demand PVC: options.claimName=OnDemand + options.storageClass +
+# options.sizeLimit make Spark's MountVolumesFeatureStep create a PVC owned by the
+# driver pod (a 5th object) and mount it on the driver. Keep in sync with
+# application.yaml.
+--master
+k8s://http://__RECORDER__
+--deploy-mode
+cluster
+--name
+sparkpi
+--class
+org.apache.spark.examples.SparkPi
+--conf
+spark.kubernetes.namespace=default
+--conf
+spark.kubernetes.container.image=__IMAGE__
+--conf
+spark.kubernetes.submission.waitAppCompletion=false
+--conf
+spark.kubernetes.driver.volumes.persistentVolumeClaim.data.mount.path=/data
+--conf
+spark.kubernetes.driver.volumes.persistentVolumeClaim.data.options.claimName=OnDemand
+--conf
+spark.kubernetes.driver.volumes.persistentVolumeClaim.data.options.storageClass=standard
+--conf
+spark.kubernetes.driver.volumes.persistentVolumeClaim.data.options.sizeLimit=1Gi
+__EXAMPLES_JAR__
