@@ -1,0 +1,50 @@
+{
+  "apiVersion": "v1",
+  "kind": "Service",
+  "metadata": {
+    "labels": {
+      "spark-app-selector": "__APP_ID__"
+    },
+    "name": "__PREFIX__-driver-svc",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "controller": true,
+        "kind": "Pod",
+        "name": "__PREFIX__-driver",
+        "uid": "oracle-uid-pod"
+      }
+    ]
+  },
+  "spec": {
+    "clusterIP": "None",
+    "ipFamilies": [
+      "IPv4"
+    ],
+    "ipFamilyPolicy": "SingleStack",
+    "ports": [
+      {
+        "name": "driver-rpc-port",
+        "port": 7078,
+        "targetPort": 7078
+      },
+      {
+        "name": "blockmanager",
+        "port": 7079,
+        "targetPort": 7079
+      },
+      {
+        "name": "spark-ui",
+        "port": 4040,
+        "targetPort": 4040
+      }
+    ],
+    "selector": {
+      "env": "prod",
+      "spark-app-name": "sparkpi",
+      "spark-app-selector": "__APP_ID__",
+      "spark-role": "driver",
+      "spark-version": "4.0.4"
+    }
+  }
+}

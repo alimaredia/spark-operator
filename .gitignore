@@ -2,6 +2,9 @@
 .vscode/
 .kube/
 bin/
+# Stray oracle recorder binary if built into the repo root
+# (go build ./test/oracle/recorder). regen.sh builds it into a temp dir instead.
+/recorder
 codecov.yaml
 cover.out
 cover.html

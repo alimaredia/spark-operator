@@ -1,0 +1,17 @@
+# Source-of-truth SparkApplication for the "sparkpi-minimal" oracle case.
+# The Go SparkDriverCreator will consume this CRD; regen.sh feeds the
+# equivalent spark-submit args (submit-args.txt) to stock spark-submit to
+# produce the golden driver resources. Keep the two in sync.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: "__IMAGE__"
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: "__EXAMPLES_JAR__"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"
