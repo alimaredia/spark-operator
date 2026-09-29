@@ -130,5 +130,13 @@ func buildSystemProperties(c *driverConf) map[string]string {
 		props[confExecPodTemplateContainerName] = c.execPodTemplateContainerName
 	}
 
+	// Hadoop config ConfigMap (HadoopConfDriverFeatureStep.getAdditionalPodSystemProperties):
+	// record the ConfigMap name so executors mount the same Hadoop config. The input
+	// spark.kubernetes.hadoop.configMapName conf is carried through by the sparkConf
+	// passthrough; this adds the derived executor-facing property.
+	if c.hadoopConfigMapName != "" {
+		props[confExecHadoopConfigMapName] = c.hadoopConfigMapName
+	}
+
 	return props
 }

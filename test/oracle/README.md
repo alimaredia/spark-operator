@@ -121,6 +121,18 @@ in the matrix:
   secret — no API object. No new golden file; the effect is in `driver-pod.json` (the
   two credential env vars + the two secret volumes/mounts) and `configmap.json`.
 
+- **`sparkpi-hadoopconf`** — Spark's `HadoopConfDriverFeatureStep` in its
+  pre-existing-ConfigMap mode. When `spark.kubernetes.hadoop.configMapName` names an
+  existing ConfigMap, Spark mounts it on the driver as the Hadoop config dir: a pod
+  volume (`hadoop-properties`, `configMap` source, no items), a container mount at
+  `/opt/hadoop/conf`, and a `HADOOP_CONF_DIR=/opt/hadoop/conf` env var (added after
+  the base env, before `SPARK_LOCAL_DIRS`). No new object — the ConfigMap must
+  pre-exist (only the `HADOOP_CONF_DIR` local-directory mode creates one, a submit-host
+  artifact the native path does not reproduce). `spark.properties` carries both the
+  input `spark.kubernetes.hadoop.configMapName` (passthrough) and the derived
+  `spark.kubernetes.executor.hadoopConfigMapName`. Effect is in `driver-pod.json` and
+  `configmap.json`.
+
 ## Running the tests
 
 Pure Go, no JVM required — reads the committed golden files:

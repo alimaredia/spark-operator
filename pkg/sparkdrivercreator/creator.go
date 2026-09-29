@@ -148,6 +148,10 @@ func buildDriverPod(conf *driverConf) *corev1.Pod {
 		// LocalDirsFeatureStep in Spark's feature order, so driver-volume mounts
 		// precede the pod-template and local-dir ones. No-op without driver volumes.
 		newMountVolumesFeatureStep(conf),
+		// HadoopConfDriverFeatureStep runs after MountVolumes and before
+		// PodTemplateConfigMap/LocalDirs in Spark's feature order, so the HADOOP_CONF_DIR
+		// env precedes SPARK_LOCAL_DIRS. No-op unless a Hadoop config ConfigMap is named.
+		newHadoopConfFeatureStep(conf),
 		// PodTemplateConfigMapStep runs before LocalDirsFeatureStep in Spark's
 		// feature order, so the pod-template volume/mount precede the local-dir
 		// ones. It is a no-op when there is no executor template.

@@ -1,0 +1,24 @@
+# spark-submit args for the "sparkpi-hadoopconf" oracle case (one token per line).
+# Lines starting with # and blank lines are ignored.
+# __RECORDER__ / __IMAGE__ / __EXAMPLES_JAR__ are substituted by regen.sh.
+#
+# HadoopConfDriverFeatureStep, pre-existing-ConfigMap mode: naming an existing
+# ConfigMap via spark.kubernetes.hadoop.configMapName makes Spark mount it as the
+# Hadoop config dir on the driver (no new object). Keep in sync with application.yaml.
+--master
+k8s://http://__RECORDER__
+--deploy-mode
+cluster
+--name
+sparkpi
+--class
+org.apache.spark.examples.SparkPi
+--conf
+spark.kubernetes.namespace=default
+--conf
+spark.kubernetes.container.image=__IMAGE__
+--conf
+spark.kubernetes.submission.waitAppCompletion=false
+--conf
+spark.kubernetes.hadoop.configMapName=my-hadoop-conf
+__EXAMPLES_JAR__

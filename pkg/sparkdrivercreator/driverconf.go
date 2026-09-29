@@ -184,6 +184,12 @@ type driverConf struct {
 	// sourced via secretKeyRef (spark.kubernetes.driver.secretKeyRef.*).
 	driverSecrets    []secretMount
 	driverEnvSecrets []envSecret
+
+	// hadoopConfigMapName is a pre-existing ConfigMap to mount as the Hadoop config
+	// dir on the driver (spark.kubernetes.hadoop.configMapName). Empty unless set; the
+	// HADOOP_CONF_DIR local-directory mode of HadoopConfDriverFeatureStep is a
+	// submit-host artifact and is not reproduced. See hadoop_conf.go.
+	hadoopConfigMapName string
 }
 
 // newDriverConf resolves a SparkApplication into a driverConf, applying Spark's
@@ -335,6 +341,11 @@ func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverCon
 	if err != nil {
 		return nil, err
 	}
+
+	// Resolve a pre-existing Hadoop config ConfigMap to mount on the driver
+	// (HadoopConfDriverFeatureStep). See hadoop_conf.go.
+	c.hadoopConfigMapName = c.sparkConf[confHadoopConfigMapName]
+
 	return c, nil
 }
 

@@ -1,0 +1,23 @@
+# Source-of-truth SparkApplication for the "sparkpi-hadoopconf" oracle case.
+#
+# Models Spark's HadoopConfDriverFeatureStep in its pre-existing-ConfigMap mode:
+# when spark.kubernetes.hadoop.configMapName names an existing ConfigMap, Spark
+# mounts it on the driver as the Hadoop config dir. Unlike the HADOOP_CONF_DIR
+# (local-directory) mode, this creates NO additional object — it only references the
+# named ConfigMap, adds the volume/mount, sets HADOOP_CONF_DIR on the container, and
+# records spark.kubernetes.executor.hadoopConfigMapName. Expressed via
+# spec.sparkConf passthrough. Keep in sync with submit-args.txt.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: "__IMAGE__"
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: "__EXAMPLES_JAR__"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"
+    spark.kubernetes.hadoop.configMapName: my-hadoop-conf
