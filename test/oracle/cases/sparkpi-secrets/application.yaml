@@ -1,0 +1,34 @@
+# Source-of-truth SparkApplication for the "sparkpi-secrets" oracle case.
+#
+# Exercises the two referenced-secret feature steps, which create NO API object
+# (the Secrets must already exist in the namespace) and only mutate the driver pod:
+#   - MountSecretsFeatureStep: spec.driver.secrets -> a pod volume
+#     ("<secretName>-volume", source: the pre-existing Secret) + a driver mount.
+#   - EnvSecretsFeatureStep: spec.driver.envSecretKeyRefs -> a driver env var whose
+#     value comes from a key of a pre-existing Secret (valueFrom.secretKeyRef).
+#
+# Both are driven purely by conf (spark.kubernetes.driver.secrets.* /
+# spark.kubernetes.driver.secretKeyRef.*), so the native builder reproduces them
+# from the resolved SparkConf. Keep in sync with submit-args.txt.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: "__IMAGE__"
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: "__EXAMPLES_JAR__"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"
+  driver:
+    secrets:
+      - name: my-secret
+        path: /etc/secrets
+        secretType: Generic
+    envSecretKeyRefs:
+      MY_ENV_SECRET:
+        name: my-secret
+        key: password

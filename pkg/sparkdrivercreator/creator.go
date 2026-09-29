@@ -138,6 +138,12 @@ func buildDriverPod(conf *driverConf) *corev1.Pod {
 	steps := []featureStep{
 		newBasicDriverFeatureStep(conf),
 		newDriverKubernetesCredentialsFeatureStep(conf),
+		// MountSecretsFeatureStep then EnvSecretsFeatureStep run before
+		// MountVolumesFeatureStep in Spark's feature order, so secret volumes/mounts
+		// and secretKeyRef env vars precede the driver-volume ones. Both are no-ops
+		// without referenced secrets and create no API object (the Secrets pre-exist).
+		newMountSecretsFeatureStep(conf),
+		newEnvSecretsFeatureStep(conf),
 		// MountVolumesFeatureStep runs before PodTemplateConfigMapStep and
 		// LocalDirsFeatureStep in Spark's feature order, so driver-volume mounts
 		// precede the pod-template and local-dir ones. No-op without driver volumes.

@@ -85,6 +85,18 @@ in the matrix:
   case exercises. fabric8 serializes the driver-volume mount/source's zero-valued
   `readOnly`/`subPath`/`subPathExpr` explicitly (Go's typed structs omit them), so
   normalization strips those zero values to keep the two sides comparable.
+- **`sparkpi-secrets`** — referenced secrets, pinning `MountSecretsFeatureStep` and
+  `EnvSecretsFeatureStep`. Neither creates an API object (the Secret must pre-exist);
+  both only mutate the driver pod. `spec.driver.secrets` → a pod volume
+  (`<secretName>-volume`, source: the Secret) + a driver mount at the given path
+  (`spark.kubernetes.driver.secrets.<name>=<path>`); `spec.driver.envSecretKeyRefs`
+  → a driver env var sourced via `valueFrom.secretKeyRef`
+  (`spark.kubernetes.driver.secretKeyRef.<env>=<name>:<key>`). The builder folds the
+  typed CRD secret fields into the resolved conf (as the operator does with `--conf`),
+  so the feature steps and the `spark.properties` passthrough share one source of
+  truth. No new golden file — the effect is entirely in `driver-pod.json` (secret
+  volume/mount ordered before the local-dir/conf ones; the secretKeyRef env var right
+  after the base env) and `configmap.json` (the two secret confs).
 
 ## Running the tests
 

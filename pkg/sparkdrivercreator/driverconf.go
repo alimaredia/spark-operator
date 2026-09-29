@@ -177,6 +177,13 @@ type driverConf struct {
 	// (ReadWriteOncePod unless the legacy conf flips it to ReadWriteOnce).
 	driverVolumes []driverVolume
 	pvcAccessMode corev1.PersistentVolumeAccessMode
+
+	// Secrets referenced by the driver (see mount_secrets.go). Neither creates an
+	// API object — both reference pre-existing Secrets. driverSecrets are mounted as
+	// volumes (spark.kubernetes.driver.secrets.*); driverEnvSecrets are env vars
+	// sourced via secretKeyRef (spark.kubernetes.driver.secretKeyRef.*).
+	driverSecrets    []secretMount
+	driverEnvSecrets []envSecret
 }
 
 // newDriverConf resolves a SparkApplication into a driverConf, applying Spark's
@@ -304,6 +311,23 @@ func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverCon
 	c.pvcAccessMode = pvcAccessModeDefault
 	if c.sparkConf[confLegacyPVCAccess] == "true" {
 		c.pvcAccessMode = pvcAccessModeLegacy
+	}
+
+	// Resolve referenced secrets (mounted volumes + secretKeyRef env vars). Neither
+	// creates an object; both only mutate the driver pod. See mount_secrets.go. The
+	// typed CRD secret fields are first folded into the conf (mirroring the operator's
+	// --conf translation) so the feature steps and the spark.properties passthrough
+	// share one source of truth.
+	if len(driver.Secrets) > 0 || len(driver.EnvSecretKeyRefs) > 0 {
+		if c.sparkConf == nil {
+			c.sparkConf = map[string]string{}
+		}
+		addDriverSecretConf(c.sparkConf, driver)
+	}
+	c.driverSecrets = parseDriverSecrets(c.sparkConf)
+	c.driverEnvSecrets, err = parseDriverEnvSecrets(c.sparkConf)
+	if err != nil {
+		return nil, err
 	}
 	return c, nil
 }
