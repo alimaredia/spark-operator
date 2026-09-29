@@ -1,0 +1,32 @@
+# Source-of-truth SparkApplication for the "sparkpi-operator" oracle case.
+#
+# Unlike sparkpi-minimal/overrides (which model *stock* spark-submit), this case
+# models what the Kubeflow Spark Operator actually submits: a deterministic
+# driver pod name (spark.kubernetes.driver.pod.name) plus the operator's tracking
+# labels (launched-by / mutated-by / submission-id / app-name), which the
+# controller relies on to find and reconcile the driver pod. It pins that
+# SparkDriverCreator reproduces spark-submit's handling of a pod-name override and
+# of the operator labels. Keep in sync with submit-args.txt.
+#
+# The submission-id is a fixed sentinel here (at runtime it is a random UUID); the
+# oracle fixture controls the input on both sides, so no normalization is needed.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: "__IMAGE__"
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: "__EXAMPLES_JAR__"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"
+    spark.kubernetes.driver.pod.name: sparkpi-driver
+  driver:
+    labels:
+      sparkoperator.k8s.io/app-name: sparkpi
+      sparkoperator.k8s.io/launched-by-spark-operator: "true"
+      sparkoperator.k8s.io/mutated-by-spark-operator: "true"
+      sparkoperator.k8s.io/submission-id: 00000000-0000-0000-0000-000000000000

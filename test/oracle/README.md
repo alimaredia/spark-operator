@@ -44,6 +44,24 @@ regen.sh                  run spark-submit against the recorder, write golden
 oracle_test.go            pure-Go test: no JVM; reads committed golden files
 ```
 
+## Cases
+
+Each `cases/<case>/` is one submission scenario, exercised across every version
+in the matrix:
+
+- **`sparkpi-minimal`** — a bare cluster-mode Scala submit; the floor of what
+  `Build` must reproduce.
+- **`sparkpi-overrides`** — user-set driver cores/memory/labels/env/etc., pinning
+  the conditional structured-field translations.
+- **`sparkpi-operator`** — models how the **Spark Operator** submits: it sets
+  `spark.kubernetes.driver.pod.name` to a deterministic `<app>-driver` and injects
+  the operator tracking labels (`sparkoperator.k8s.io/app-name`,
+  `.../launched-by-spark-operator`, `.../mutated-by-spark-operator`,
+  `.../submission-id`). This is the scenario the native (spark-submit-free)
+  submitter will drive, so the pod name diverges from the random resource prefix
+  (which the Service and ConfigMap still carry). The `submission-id` uses a fixed
+  sentinel UUID so both sides are deterministic without extra normalization.
+
 ## Running the tests
 
 Pure Go, no JVM required — reads the committed golden files:
@@ -94,3 +112,8 @@ ConfigMap id, local dir, submitTime, properties date, master URL, SPARK_USER,
 and owner-reference uid — the last two are host/post-create values the pure-Go
 builder cannot reproduce). The golden object files are byte-identical across
 independent `spark-submit` runs.
+
+The per-submission **resource prefix** (`<appName>-<16hex>`) is extracted from the
+driver **Service** name (`<prefix>-driver-svc`), not the pod name: when a case
+overrides `spark.kubernetes.driver.pod.name` (e.g. `sparkpi-operator`), the pod
+name no longer contains the prefix, but the Service and ConfigMap always do.

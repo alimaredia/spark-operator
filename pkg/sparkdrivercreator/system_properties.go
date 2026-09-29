@@ -80,7 +80,7 @@ func buildSystemProperties(c *driverConf) map[string]string {
 	props[confNamespace] = c.namespace
 	props[confMemoryOverheadFactor] = memoryOverheadFactorString
 	props[confSubmitInDriver] = "true"
-	props[confDriverPodName] = c.resourceNamePrefix + driverPodNameSuffix
+	props[confDriverPodName] = c.driverPodName
 	if c.mainAppResource != "" {
 		props[confJars] = c.mainAppResource
 	}

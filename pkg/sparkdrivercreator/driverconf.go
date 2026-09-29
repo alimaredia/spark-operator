@@ -91,6 +91,14 @@ type driverConf struct {
 	localDir           string // /var/data/spark-<uuid>, randomized (normalized away)
 	serviceName        string // <resourceNamePrefix>-driver-svc, randomized (normalized away)
 
+	// driverPodName is the driver pod's name. Stock spark-submit defaults it to
+	// "<resourceNamePrefix>-driver" (randomized), but honors an explicit
+	// spark.kubernetes.driver.pod.name override. The Kubeflow operator always sets
+	// that override to a deterministic "<app>-driver" so the controller can track
+	// the pod by name — so unlike the service/ConfigMap names (which stay derived
+	// from the random prefix), this may be a fixed value.
+	driverPodName string
+
 	// Application entry point (JVM/Scala apps only in this subset).
 	mainClass       string
 	mainAppResource string
@@ -195,8 +203,11 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 		limitCores = *driver.CoreLimit
 	}
 
-	// The resource-name prefix is generated once and shared: the pod is
-	// "<prefix>-driver" and its service "<prefix>-driver-svc", so they must agree.
+	// The resource-name prefix is generated once and shared: the service is
+	// "<prefix>-driver-svc" and the ConfigMap "spark-drv-<id>-conf-map", both
+	// derived from it. The driver pod also defaults to "<prefix>-driver", but an
+	// explicit spark.kubernetes.driver.pod.name (or driver.podName) overrides only
+	// the pod name — the service/ConfigMap keep the random prefix.
 	resourceNamePrefix := generateResourceNamePrefix(appName)
 
 	c := &driverConf{
@@ -207,6 +218,7 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 		configMapName:         generateConfigMapName(),
 		localDir:              generateLocalDir(),
 		serviceName:           generateDriverServiceName(resourceNamePrefix),
+		driverPodName:         resolveDriverPodName(driver, app.Spec.SparkConf, resourceNamePrefix),
 		image:                 image,
 		imagePullPolicy:       defaultImagePullPolicy,
 		cores:                 cores,
@@ -369,6 +381,22 @@ func generateConfigMapName() string {
 // mounts when the user configures none: /var/data/spark-<uuid>.
 func generateLocalDir() string {
 	return "/var/data/spark-" + randUUID()
+}
+
+// resolveDriverPodName mirrors Spark's driver pod naming: an explicit
+// spark.kubernetes.driver.pod.name wins, otherwise the pod is
+// "<resourceNamePrefix>-driver". The CRD's driver.podName is honored first because
+// the operator's util.GetDriverPodName translates it into that conf before submit;
+// checking it here keeps the pure-Go builder correct even without the adapter.
+// Only the pod name changes — the service and ConfigMap keep the random prefix.
+func resolveDriverPodName(driver v1beta2.DriverSpec, sparkConf map[string]string, resourceNamePrefix string) string {
+	if driver.PodName != nil && *driver.PodName != "" {
+		return *driver.PodName
+	}
+	if name := sparkConf[confDriverPodName]; name != "" {
+		return name
+	}
+	return resourceNamePrefix + driverPodNameSuffix
 }
 
 // generateDriverServiceName mirrors KubernetesConf.driverServiceName: the driver

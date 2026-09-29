@@ -100,7 +100,7 @@ func (s *basicDriverFeatureStep) configurePod(in sparkPod) sparkPod {
 	container.Resources = s.resources()
 
 	// --- pod metadata ---
-	pod.Name = c.resourceNamePrefix + driverPodNameSuffix
+	pod.Name = c.driverPodName
 	pod.Labels = mergeInto(pod.Labels, c.labels)
 	pod.Annotations = mergeInto(pod.Annotations, c.annotations)
 

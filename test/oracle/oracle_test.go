@@ -94,11 +94,14 @@ func TestGoldenWellFormed(t *testing.T) {
 							"golden %s still contains an un-normalized %s", file, desc)
 					}
 				}
-				// Normalization must have run: the driver pod name is placeholdered.
-				pod := readGolden(t, dir, "driver-pod.json")
-				name, _ := pod["metadata"].(map[string]any)["name"].(string)
+				// Normalization must have run: the driver service name always carries
+				// the random resource-name prefix ("<prefix>-driver-svc"), so it is
+				// placeholdered on every case — including operator submissions that
+				// override the pod name to a fixed value that no longer holds the prefix.
+				svc := readGolden(t, dir, "service.json")
+				name, _ := svc["metadata"].(map[string]any)["name"].(string)
 				assert.Contains(t, name, oraclenorm.PlaceholderPrefix,
-					"driver pod name should be normalized to a placeholder")
+					"driver service name should be normalized to a placeholder")
 			})
 		}
 	}
@@ -120,9 +123,11 @@ func TestDriverSpecMatchesOracle(t *testing.T) {
 				require.NotNil(t, res)
 				require.NotNil(t, res.Pod, "driver pod must always be built")
 
-				// Vars are extracted from the pod (it carries the app id / prefix /
-				// configmap id / local dir the other objects reference).
-				vars := oraclenorm.Extract(toUnstructured(t, res.Pod, "Pod", "v1"))
+				// Vars are extracted from the service: its name always carries the
+				// random resource-name prefix (as "<prefix>-driver-svc"), even when the
+				// driver pod name is overridden, and it carries the app-selector label.
+				require.NotNil(t, res.Service, "driver service is needed to extract normalization vars")
+				vars := oraclenorm.Extract(toUnstructured(t, res.Service, "Service", "v1"))
 				dir := filepath.Join("golden", ver, name)
 
 				objects := []struct {

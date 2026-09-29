@@ -58,7 +58,7 @@ func driverPodOwnerReference(conf *driverConf) []metav1.OwnerReference {
 		{
 			APIVersion: podAPIVersion,
 			Kind:       podKind,
-			Name:       conf.resourceNamePrefix + driverPodNameSuffix,
+			Name:       conf.driverPodName,
 			Controller: ptr.To(true),
 		},
 	}

@@ -87,11 +87,12 @@ func run(rawDir, outDir string) error {
 		return fmt.Errorf("no usable objects in %s", rawDir)
 	}
 
-	// Extract per-submission Vars from the driver Pod so every object in this
-	// case is normalized against the same placeholders.
+	// Extract per-submission Vars from the driver Service so every object in this
+	// case is normalized against the same placeholders. The Service name carries
+	// the random resource-name prefix even when the pod name is overridden.
 	var vars oraclenorm.Vars
 	for _, it := range items {
-		if it.kind == "Pod" {
+		if it.kind == "Service" {
 			vars = oraclenorm.Extract(it.obj)
 			break
 		}

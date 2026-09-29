@@ -35,7 +35,7 @@ limitations under the License.
 //
 // Both cmd/oraclegen and the oracle test apply the SAME normalization,
 // extracting the per-submission Vars (app id, prefix) from their own driver
-// pod, so placeholders line up on both sides.
+// service, so placeholders line up on both sides.
 package oraclenorm
 
 import (
@@ -65,8 +65,9 @@ type Vars struct {
 	// AppID is Spark's k8s app id, e.g. "spark-73e10c...". From the
 	// spark-app-selector label.
 	AppID string
-	// Prefix is the resource-name prefix "<appName>-<16hex>". The driver pod is
-	// "<Prefix>-driver", the service "<Prefix>-driver-svc".
+	// Prefix is the resource-name prefix "<appName>-<16hex>". The service is
+	// "<Prefix>-driver-svc" and the driver pod defaults to "<Prefix>-driver"
+	// (unless overridden by spark.kubernetes.driver.pod.name).
 	Prefix string
 }
 
@@ -88,13 +89,17 @@ var volatileMetadataKeys = []string{
 	"managedFields", "selfLink",
 }
 
-// Extract derives the per-submission Vars from a parsed driver pod object.
-func Extract(pod map[string]any) Vars {
+// Extract derives the per-submission Vars from a parsed driver Service object.
+// The Service is used (rather than the pod) because its name is always
+// "<resourceNamePrefix>-driver-svc", carrying the random prefix even when the pod
+// name is overridden via spark.kubernetes.driver.pod.name — in which case the pod
+// name no longer contains the prefix.
+func Extract(service map[string]any) Vars {
 	var v Vars
-	meta, _ := pod["metadata"].(map[string]any)
+	meta, _ := service["metadata"].(map[string]any)
 	if meta != nil {
-		if name, _ := meta["name"].(string); strings.HasSuffix(name, "-driver") {
-			v.Prefix = strings.TrimSuffix(name, "-driver")
+		if name, _ := meta["name"].(string); strings.HasSuffix(name, "-driver-svc") {
+			v.Prefix = strings.TrimSuffix(name, "-driver-svc")
 		}
 		if labels, _ := meta["labels"].(map[string]any); labels != nil {
 			if sel, _ := labels["spark-app-selector"].(string); sel != "" {
