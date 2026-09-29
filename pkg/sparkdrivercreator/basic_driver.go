@@ -141,25 +141,11 @@ func (s *basicDriverFeatureStep) containerEnv() []corev1.EnvVar {
 	return env
 }
 
-// containerPorts emits the driver container ports, dropping any whose value is 0
-// (an invalid k8s containerPort) — which is how the spark-connect port stays off
-// by default on Spark 4.0.x.
+// containerPorts emits the driver container ports from the shared resolved port
+// set, as TCP container ports.
 func (s *basicDriverFeatureStep) containerPorts() []corev1.ContainerPort {
-	conf := s.conf
-	candidates := []struct {
-		name string
-		port int32
-	}{
-		{portNameDriverRPC, int32(conf.intConf(confDriverPort, defaultDriverPort))},
-		{portNameBlockManager, int32(conf.blockManagerPort())},
-		{portNameUI, int32(conf.intConf(confUIPort, defaultUIPort))},
-		{portNameConnectServer, int32(conf.intConf(confConnectPort, defaultConnectPort))},
-	}
 	var ports []corev1.ContainerPort
-	for _, p := range candidates {
-		if p.port == 0 {
-			continue
-		}
+	for _, p := range s.conf.ports() {
 		ports = append(ports, corev1.ContainerPort{
 			Name:          p.name,
 			ContainerPort: p.port,

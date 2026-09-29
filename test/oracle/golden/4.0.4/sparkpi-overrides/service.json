@@ -12,7 +12,7 @@
         "controller": true,
         "kind": "Pod",
         "name": "__PREFIX__-driver",
-        "uid": "oracle-uid-pod"
+        "uid": "__OWNER_UID__"
       }
     ]
   },

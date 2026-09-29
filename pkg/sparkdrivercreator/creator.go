@@ -35,6 +35,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
 )
@@ -45,6 +46,23 @@ const (
 	podAPIVersion = "v1"
 	podKind       = "Pod"
 )
+
+// driverPodOwnerReference returns the owner reference the driver pod's owned
+// resources (ConfigMap, Service) carry. It points at the driver pod and marks it
+// the controller, but leaves uid unset: the pod's uid is server-assigned at
+// creation time, so the submitter adapter fills it in after creating the pod
+// (mirroring Spark's Client.run -> addOwnerReference). The oracle normalizes the
+// uid on both sides.
+func driverPodOwnerReference(conf *driverConf) []metav1.OwnerReference {
+	return []metav1.OwnerReference{
+		{
+			APIVersion: podAPIVersion,
+			Kind:       podKind,
+			Name:       conf.resourceNamePrefix + driverPodNameSuffix,
+			Controller: ptr.To(true),
+		},
+	}
+}
 
 // DriverResources is everything the driver pod needs to exist: the pod itself
 // plus the resources spark-submit would otherwise create and own.
@@ -74,9 +92,10 @@ func (c *SparkDriverCreator) Build(app *v1beta2.SparkApplication) (*DriverResour
 	}
 
 	pod := buildDriverPod(conf)
-	// TODO(sparkdrivercreator): assemble the driver Service and ConfigMap. Until
-	// then they stay nil and the oracle skips those objects.
-	return &DriverResources{Pod: pod}, nil
+	service := buildDriverService(conf)
+	// TODO(sparkdrivercreator): assemble the driver ConfigMap (spark.properties).
+	// Until then it stays nil and the oracle skips that object.
+	return &DriverResources{Pod: pod, Service: service}, nil
 }
 
 // buildDriverPod runs the reproducible feature steps in Spark's order and folds

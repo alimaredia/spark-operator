@@ -55,6 +55,7 @@ const (
 	PlaceholderDate       = "__DATE__"
 	PlaceholderMaster     = "__MASTER__"
 	PlaceholderSparkUser  = "__SPARK_USER__"
+	PlaceholderOwnerUID   = "__OWNER_UID__"
 )
 
 // Vars are the per-submission identifiers extracted once per case (from the
@@ -121,6 +122,11 @@ func Normalize(raw []byte, vars Vars) ([]byte, error) {
 	// SPARK_USER is the submit host's OS user (Utils.getCurrentUserName) — host
 	// dependent, so pin it rather than the machine that ran the capture.
 	normalizeSparkUserEnv(obj)
+	// Owner-reference uids point at the driver pod's server-assigned uid, which is
+	// only known after the pod is created (the recorder fabricates "oracle-uid-pod";
+	// the pure-Go builder leaves it unset for the submitter to fill). Pin it so
+	// both sides agree.
+	normalizeOwnerReferenceUIDs(obj)
 
 	// Re-serialize (canonical, sorted keys) then do string-level substitution so
 	// identifiers are replaced everywhere — including inside spark.properties.
@@ -197,6 +203,26 @@ func normalizeSparkUserEnv(obj map[string]any) {
 				}
 			}
 		}
+	}
+}
+
+// normalizeOwnerReferenceUIDs pins the uid of every metadata.ownerReferences
+// entry to a stable placeholder, adding the field when absent. The owner pod's
+// uid is server-assigned (post-create), so it is not reproducible and the pure-Go
+// builder does not set it; this makes the captured value and the builder's
+// (absent) value line up.
+func normalizeOwnerReferenceUIDs(obj map[string]any) {
+	meta, _ := obj["metadata"].(map[string]any)
+	if meta == nil {
+		return
+	}
+	refs, _ := meta["ownerReferences"].([]any)
+	for _, r := range refs {
+		ref, _ := r.(map[string]any)
+		if ref == nil {
+			continue
+		}
+		ref["uid"] = PlaceholderOwnerUID
 	}
 }
 

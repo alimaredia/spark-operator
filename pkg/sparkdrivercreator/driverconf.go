@@ -42,6 +42,7 @@ const (
 	defaultDriverContainerNm  = "spark-kubernetes-driver"
 	defaultImagePullPolicy    = corev1.PullIfNotPresent
 	driverPodNameSuffix       = "-driver"
+	driverServiceSuffix       = "-driver-svc"
 	kubernetesDNSLabelMaxSize = 63
 )
 
@@ -83,6 +84,7 @@ type driverConf struct {
 	sparkVersion       string // value of the spark-version label (the runtime Spark version)
 	configMapName      string // spark-drv-<16hex>-conf-map, randomized (normalized away)
 	localDir           string // /var/data/spark-<uuid>, randomized (normalized away)
+	serviceName        string // <resourceNamePrefix>-driver-svc, randomized (normalized away)
 
 	// Application entry point (JVM/Scala apps only in this subset).
 	mainClass       string
@@ -161,13 +163,18 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 		limitCores = *driver.CoreLimit
 	}
 
+	// The resource-name prefix is generated once and shared: the pod is
+	// "<prefix>-driver" and its service "<prefix>-driver-svc", so they must agree.
+	resourceNamePrefix := generateResourceNamePrefix(appName)
+
 	c := &driverConf{
 		appName:               appName,
 		appID:                 generateAppID(),
-		resourceNamePrefix:    generateResourceNamePrefix(appName),
+		resourceNamePrefix:    resourceNamePrefix,
 		sparkVersion:          app.Spec.SparkVersion,
 		configMapName:         generateConfigMapName(),
 		localDir:              generateLocalDir(),
+		serviceName:           generateDriverServiceName(resourceNamePrefix),
 		image:                 image,
 		imagePullPolicy:       defaultImagePullPolicy,
 		cores:                 cores,
@@ -326,6 +333,19 @@ func generateLocalDir() string {
 	return "/var/data/spark-" + randUUID()
 }
 
+// generateDriverServiceName mirrors KubernetesConf.driverServiceName: the driver
+// service is "<resourceNamePrefix>-driver-svc" unless that exceeds the 63-char
+// DNS label limit, in which case Spark falls back to a "spark-<uniqueID>-driver-svc"
+// form. The fallback only triggers for very long app names (none in the oracle
+// matrix); it is included for parity.
+func generateDriverServiceName(resourceNamePrefix string) string {
+	preferred := resourceNamePrefix + driverServiceSuffix
+	if len(preferred) <= kubernetesDNSLabelMaxSize {
+		return preferred
+	}
+	return "spark-" + randHex(8) + driverServiceSuffix
+}
+
 // randUUID returns a random RFC-4122-shaped UUID (8-4-4-4-12 hex). Only the
 // shape matters here — the value is normalized to a placeholder in the oracle.
 func randUUID() string {
@@ -406,6 +426,33 @@ func (c *driverConf) blockManagerPort() int {
 		return c.intConf(confDriverBMPort, defaultBlockManagerPort)
 	}
 	return c.intConf(confBlockManagerPort, defaultBlockManagerPort)
+}
+
+// portSpec is a resolved (name, port) pair shared by the container ports and the
+// driver service ports — the oracle proves the two sets are identical.
+type portSpec struct {
+	name string
+	port int32
+}
+
+// ports resolves the driver's ports in Spark's order, dropping any that resolve
+// to 0 (an invalid port) — which is how the spark-connect port stays off by
+// default on Spark 4.0.x.
+func (c *driverConf) ports() []portSpec {
+	candidates := []portSpec{
+		{portNameDriverRPC, int32(c.intConf(confDriverPort, defaultDriverPort))},
+		{portNameBlockManager, int32(c.blockManagerPort())},
+		{portNameUI, int32(c.intConf(confUIPort, defaultUIPort))},
+		{portNameConnectServer, int32(c.intConf(confConnectPort, defaultConnectPort))},
+	}
+	out := make([]portSpec, 0, len(candidates))
+	for _, p := range candidates {
+		if p.port == 0 {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func copyStringMap(m map[string]string) map[string]string {
