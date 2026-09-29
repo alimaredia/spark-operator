@@ -1,0 +1,5 @@
+metadata: {}
+spec:
+  containers:
+  - name: spark-kubernetes-driver
+    resources: {}

@@ -31,7 +31,7 @@ import (
 // isolation. The full byte-for-byte pod check lives in test/oracle.
 
 func TestLocalDirsFeatureStep(t *testing.T) {
-	conf, err := newDriverConf(minimalApp())
+	conf, err := newDriverConf(minimalApp(), BuildOptions{})
 	require.NoError(t, err)
 
 	out := newLocalDirsFeatureStep(conf).configurePod(initialSparkPod())
@@ -49,7 +49,7 @@ func TestLocalDirsFeatureStep(t *testing.T) {
 }
 
 func TestDriverCommandFeatureStep_Java(t *testing.T) {
-	conf, err := newDriverConf(minimalApp())
+	conf, err := newDriverConf(minimalApp(), BuildOptions{})
 	require.NoError(t, err)
 
 	out := newDriverCommandFeatureStep(conf).configurePod(initialSparkPod())
@@ -66,7 +66,7 @@ func TestDriverCommandFeatureStep_ProxyUserAndArgs(t *testing.T) {
 	app := minimalApp()
 	app.Spec.ProxyUser = ptr.To("alice")
 	app.Spec.Arguments = []string{"100"}
-	conf, err := newDriverConf(app)
+	conf, err := newDriverConf(app, BuildOptions{})
 	require.NoError(t, err)
 
 	out := newDriverCommandFeatureStep(conf).configurePod(initialSparkPod())
@@ -83,7 +83,7 @@ func TestDriverCommandFeatureStep_ProxyUserAndArgs(t *testing.T) {
 
 func TestDriverKubernetesCredentialsFeatureStep(t *testing.T) {
 	t.Run("unset leaves both fields empty", func(t *testing.T) {
-		conf, err := newDriverConf(minimalApp())
+		conf, err := newDriverConf(minimalApp(), BuildOptions{})
 		require.NoError(t, err)
 		out := newDriverKubernetesCredentialsFeatureStep(conf).configurePod(initialSparkPod())
 		assert.Empty(t, out.pod.Spec.ServiceAccountName)
@@ -95,7 +95,7 @@ func TestDriverKubernetesCredentialsFeatureStep(t *testing.T) {
 		app.Spec.Driver = v1beta2.DriverSpec{SparkPodSpec: v1beta2.SparkPodSpec{
 			ServiceAccount: ptr.To("spark"),
 		}}
-		conf, err := newDriverConf(app)
+		conf, err := newDriverConf(app, BuildOptions{})
 		require.NoError(t, err)
 		out := newDriverKubernetesCredentialsFeatureStep(conf).configurePod(initialSparkPod())
 		assert.Equal(t, "spark", out.pod.Spec.ServiceAccountName)
@@ -104,7 +104,7 @@ func TestDriverKubernetesCredentialsFeatureStep(t *testing.T) {
 }
 
 func TestAttachConfVolume(t *testing.T) {
-	conf, err := newDriverConf(minimalApp())
+	conf, err := newDriverConf(minimalApp(), BuildOptions{})
 	require.NoError(t, err)
 
 	out := attachConfVolume(initialSparkPod(), conf)

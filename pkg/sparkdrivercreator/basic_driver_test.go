@@ -44,7 +44,7 @@ var (
 // empty initial pod, returning the resulting pod + main container.
 func runBasic(t *testing.T, app *v1beta2.SparkApplication) (*corev1.Pod, *corev1.Container, *driverConf) {
 	t.Helper()
-	conf, err := newDriverConf(app)
+	conf, err := newDriverConf(app, BuildOptions{})
 	require.NoError(t, err)
 	out := newBasicDriverFeatureStep(conf).configurePod(initialSparkPod())
 	return out.pod, out.container, conf
@@ -176,7 +176,7 @@ func TestNewDriverConf_MemoryOverhead(t *testing.T) {
 				Memory:         ptr.To(tc.memory),
 				MemoryOverhead: tc.overhead,
 			}}
-			conf, err := newDriverConf(app)
+			conf, err := newDriverConf(app, BuildOptions{})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantMem, conf.memoryMiB)
 			assert.Equal(t, tc.wantOverhd, conf.memoryOverheadMiB)

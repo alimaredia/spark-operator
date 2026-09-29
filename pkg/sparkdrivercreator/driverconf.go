@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/yaml"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
 )
@@ -157,13 +158,25 @@ type driverConf struct {
 
 	// sparkConf is the raw user conf, consulted for port overrides.
 	sparkConf map[string]string
+
+	// Executor pod template (classic operator path). hasExecPodTemplate gates the
+	// PodTemplateConfigMapStep port: when set, Build emits the executor
+	// pod-template ConfigMap, mounts it on the driver, and adds the executor
+	// podTemplateFile/podTemplateContainerName confs. podSpecConfigMapName is the
+	// "<prefix>-driver-podspec-conf-map" ConfigMap name; execPodTemplateYAML is the
+	// template serialized exactly as the operator writes it (sigs.k8s.io/yaml), so
+	// it lands in the ConfigMap byte-for-byte.
+	hasExecPodTemplate           bool
+	podSpecConfigMapName         string
+	execPodTemplateYAML          string
+	execPodTemplateContainerName string
 }
 
 // newDriverConf resolves a SparkApplication into a driverConf, applying Spark's
 // defaults for anything the user left unset. It generates the randomized app id
 // and resource-name prefix the same shape Spark does; the oracle normalizes both
 // sides' random values to placeholders, so they need not be deterministic.
-func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
+func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverConf, error) {
 	appName := app.Name
 	driver := app.Spec.Driver
 
@@ -218,6 +231,7 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 		configMapName:         generateConfigMapName(),
 		localDir:              generateLocalDir(),
 		serviceName:           generateDriverServiceName(resourceNamePrefix),
+		podSpecConfigMapName:  resourceNamePrefix + podSpecConfigMapSuffix,
 		driverPodName:         resolveDriverPodName(driver, app.Spec.SparkConf, resourceNamePrefix),
 		image:                 image,
 		imagePullPolicy:       defaultImagePullPolicy,
@@ -256,6 +270,20 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 	}
 	if driver.ServiceAccount != nil {
 		c.serviceAccount = *driver.ServiceAccount
+	}
+
+	// Resolve the executor pod template (classic operator path). It is serialized
+	// with the same encoder the operator uses to write the file (sigs.k8s.io/yaml,
+	// via util.WriteObjectToFile), so PodTemplateConfigMapStep — which embeds the
+	// file text verbatim — yields byte-identical ConfigMap data.
+	if opts.ExecutorPodTemplate != nil {
+		data, err := yaml.Marshal(opts.ExecutorPodTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling executor pod template: %w", err)
+		}
+		c.hasExecPodTemplate = true
+		c.execPodTemplateYAML = string(data)
+		c.execPodTemplateContainerName = defaultExecutorContainerNm
 	}
 	return c, nil
 }

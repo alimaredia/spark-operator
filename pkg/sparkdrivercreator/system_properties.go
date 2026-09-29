@@ -118,5 +118,17 @@ func buildSystemProperties(c *driverConf) map[string]string {
 		props[confNodeSelectorPrefix+k] = v
 	}
 
+	// Executor pod template (classic operator path). PodTemplateConfigMapStep
+	// rewrites spark.kubernetes.executor.podTemplateFile from the submit-time host
+	// path to the in-pod mount path; that (and the container name) are runtime
+	// relevant and reproducible, so the native path emits them. The submit-time
+	// driver.podTemplateFile/driver.podTemplateContainerName confs are host-specific
+	// artifacts and are intentionally omitted (the oracle normalization strips them
+	// from the golden to match).
+	if c.hasExecPodTemplate {
+		props[confExecPodTemplateFile] = execPodTemplateMountFile
+		props[confExecPodTemplateContainerName] = c.execPodTemplateContainerName
+	}
+
 	return props
 }

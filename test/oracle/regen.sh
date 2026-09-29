@@ -67,14 +67,18 @@ run_with_timeout() {
   return $rc
 }
 
-# build_argv <submit-args.txt> <recorder host:port>  — echoes argv, one per line.
+# build_argv <submit-args.txt> <recorder host:port> <case dir>  — echoes argv, one
+# per line. __CASE_DIR__ resolves to the case directory so pod-template cases can
+# point spark-submit at their sibling *-pod-template.yaml files.
 build_argv() {
-  local file="$1" recorder="$2"
+  local file="$1" recorder="$2" case_dir="$3"
+  case_dir="${case_dir%/}"
   while IFS= read -r line; do
     [[ -z "$line" || "$line" == \#* ]] && continue
     line="${line//__RECORDER__/$recorder}"
     line="${line//__IMAGE__/$IMAGE}"
     line="${line//__EXAMPLES_JAR__/$EXAMPLES_JAR}"
+    line="${line//__CASE_DIR__/$case_dir}"
     printf '%s\n' "$line"
   done < "$file"
 }
@@ -102,7 +106,7 @@ for case_dir in "$CASES_DIR"/*/; do
 
   # 2. run spark-submit against the recorder.
   argv=()
-  while IFS= read -r a; do argv+=("$a"); done < <(build_argv "$args_file" "$recorder_addr")
+  while IFS= read -r a; do argv+=("$a"); done < <(build_argv "$args_file" "$recorder_addr" "$case_dir")
   echo "   spark-submit ${argv[*]}"
   set +e
   SPARK_HOME="$SPARK_HOME" run_with_timeout "$SUBMIT_TIMEOUT" \

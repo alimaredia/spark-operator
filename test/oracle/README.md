@@ -36,6 +36,7 @@ golden/<version>/<case>/
   driver-pod.json         normalized captured objects — COMMITTED
   configmap.json
   service.json
+  podspec-configmap.json  executor pod-template ConfigMap — only for pod-template cases
   raw/, vars.json         intermediate capture artifacts — gitignored
 internal/oraclenorm/      shared normalization (golden + Go output use the same)
 cmd/oraclegen/            raw captures -> normalized golden files
@@ -61,6 +62,17 @@ in the matrix:
   submitter will drive, so the pod name diverges from the random resource prefix
   (which the Service and ConfigMap still carry). The `submission-id` uses a fixed
   sentinel UUID so both sides are deterministic without extra normalization.
+- **`sparkpi-podtemplate`** — the classic operator path always synthesizes a
+  driver *and* executor pod-template file, so this case pins Spark's
+  `PodTemplateConfigMapStep`: a **4th object**, the immutable executor
+  pod-template ConfigMap (`<prefix>-driver-podspec-conf-map`, golden
+  `podspec-configmap.json`), plus the driver `pod-template-volume` mount and the
+  `spark.kubernetes.executor.podTemplateFile` conf rewritten to its in-pod mount
+  path. The submit-time `driver.podTemplateFile` / `driver.podTemplateContainerName`
+  confs are host-specific artifacts the native path drops, so normalization strips
+  them from the golden. The builder consumes the same executor template object via
+  `BuildOptions.ExecutorPodTemplate`; cases without a template produce no 4th
+  object.
 
 ## Running the tests
 
@@ -72,9 +84,10 @@ go test ./test/oracle/
 
 - `TestGoldenWellFormed` guards the golden files (valid, fully normalized).
 - `TestDriverSpecMatchesOracle` is the differential test; each captured object
-  (Pod, ConfigMap, Service) is its own subtest that compares `Build`'s output to
-  the golden, or **skips** if `Build` does not produce that object yet. All three
-  (Pod, ConfigMap, Service) pass today.
+  (Pod, ConfigMap, Service, and — for pod-template cases — the executor
+  pod-template ConfigMap) is its own subtest that compares `Build`'s output to the
+  golden, or **skips** if `Build` does not produce that object for the case (e.g.
+  the pod-template ConfigMap on cases with no template). All pass today.
 
 ## Regenerating golden files (needs a JVM)
 

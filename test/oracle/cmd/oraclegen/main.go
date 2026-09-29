@@ -102,26 +102,27 @@ func run(rawDir, outDir string) error {
 		return err
 	}
 
-	// Later captures win per kind (e.g. the owner-referenced re-apply of a
-	// pre-resource supersedes its first, owner-less apply).
-	byKind := map[string]captured{}
+	// Group by golden filename (not bare Kind): a pod-template submission emits two
+	// ConfigMaps that must land in different files. Later captures win per file
+	// (e.g. the owner-referenced re-apply of a pre-resource supersedes its first,
+	// owner-less apply).
+	byGolden := map[string]captured{}
 	for _, it := range items {
-		byKind[it.kind] = it
+		byGolden[goldenFileName(it.kind, objectName(it.obj))] = it
 	}
 
-	kinds := make([]string, 0, len(byKind))
-	for k := range byKind {
-		kinds = append(kinds, k)
+	names := make([]string, 0, len(byGolden))
+	for name := range byGolden {
+		names = append(names, name)
 	}
-	sort.Strings(kinds)
+	sort.Strings(names)
 
-	for _, kind := range kinds {
-		it := byKind[kind]
+	for _, name := range names {
+		it := byGolden[name]
 		norm, err := oraclenorm.Normalize(it.raw, vars)
 		if err != nil {
-			return fmt.Errorf("normalize %s (%s): %w", kind, it.file, err)
+			return fmt.Errorf("normalize %s (%s): %w", name, it.file, err)
 		}
-		name := goldenFileName(kind)
 		if err := os.WriteFile(filepath.Join(outDir, name), norm, 0o644); err != nil {
 			return err
 		}
@@ -135,11 +136,33 @@ func run(rawDir, outDir string) error {
 	return nil
 }
 
-// goldenFileName maps a Kind to its golden filename. The driver pod gets a
-// descriptive name; everything else uses lower-cased kind.
-func goldenFileName(kind string) string {
-	if kind == "Pod" {
+// podSpecConfigMapSuffix is the executor pod-template ConfigMap's name suffix
+// (KubernetesClientUtils: "<prefix>-driver-podspec-conf-map"). It disambiguates
+// the two ConfigMaps a pod-template submission produces. Kept in sync with
+// pkg/sparkdrivercreator's constant of the same name.
+const podSpecConfigMapSuffix = "-driver-podspec-conf-map"
+
+// goldenFileName maps a captured object to its golden filename. The driver pod
+// gets a descriptive name; the executor pod-template ConfigMap is split out by
+// its name suffix so it does not collide with the driver conf ConfigMap;
+// everything else uses the lower-cased kind.
+func goldenFileName(kind, name string) string {
+	switch {
+	case kind == "Pod":
 		return "driver-pod.json"
+	case kind == "ConfigMap" && strings.HasSuffix(name, podSpecConfigMapSuffix):
+		return "podspec-configmap.json"
+	default:
+		return strings.ToLower(kind) + ".json"
 	}
-	return strings.ToLower(kind) + ".json"
+}
+
+// objectName returns metadata.name from a captured object, or "" if absent.
+func objectName(obj map[string]any) string {
+	md, ok := obj["metadata"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := md["name"].(string)
+	return name
 }

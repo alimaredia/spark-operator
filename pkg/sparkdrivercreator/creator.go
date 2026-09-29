@@ -25,9 +25,11 @@ limitations under the License.
 // Service are captured as golden files, and Build's output must match them.
 //
 // Non-reproducible submit-time behaviors (Kerberos, --packages, file uploads,
-// pod templates, custom feature steps, proxy-user, …) are out of scope here;
-// they are rejected up front by the admission webhook (the "deny-list" in
-// approaches-comparison.md), so Build only ever sees reproducible inputs.
+// custom feature steps, proxy-user, …) are out of scope here; they are rejected
+// up front by the admission webhook (the "deny-list" in approaches-comparison.md),
+// so Build only ever sees reproducible inputs. Pod templates ARE reproducible: the
+// operator hands the executor template to Build via BuildOptions and it is
+// materialized the same way spark-submit's PodTemplateConfigMapStep does.
 package sparkdrivercreator
 
 import (
@@ -70,6 +72,26 @@ type DriverResources struct {
 	Pod       *corev1.Pod
 	ConfigMap *corev1.ConfigMap
 	Service   *corev1.Service
+	// PodSpecConfigMap is the immutable executor pod-template ConfigMap Spark's
+	// PodTemplateConfigMapStep creates. It is nil unless the submission carries an
+	// executor pod template (BuildOptions.ExecutorPodTemplate).
+	PodSpecConfigMap *corev1.ConfigMap
+}
+
+// BuildOptions carries submit-time inputs the operator supplies out-of-band —
+// values that are not part of the SparkApplication spec proper but that stock
+// spark-submit would otherwise materialize itself. Today that is the executor
+// pod template the classic operator path always synthesizes and passes as a
+// file; here it is handed in as an object. A nil template means no pod-template
+// ConfigMap (and no driver volume/mount), so stock cases stay unaffected.
+//
+// The driver pod template is intentionally absent: for the minimal templates the
+// operator emits, merging it onto the driver pod is a no-op on the pod body, and
+// its only conf trace (driver.podTemplateFile) is a host-specific submit-time
+// artifact the native path drops. Non-minimal driver-template merge is a
+// documented follow-up.
+type BuildOptions struct {
+	ExecutorPodTemplate *corev1.PodTemplateSpec
 }
 
 // SparkDriverCreator builds driver resources from a SparkApplication. It makes
@@ -85,16 +107,21 @@ func New() *SparkDriverCreator { return &SparkDriverCreator{} }
 // Build runs the reproducible feature steps and returns the driver resources
 // for app. It assumes the deny-list has already rejected non-reproducible
 // inputs.
-func (c *SparkDriverCreator) Build(app *v1beta2.SparkApplication) (*DriverResources, error) {
-	conf, err := newDriverConf(app)
+func (c *SparkDriverCreator) Build(app *v1beta2.SparkApplication, opts BuildOptions) (*DriverResources, error) {
+	conf, err := newDriverConf(app, opts)
 	if err != nil {
 		return nil, fmt.Errorf("sparkdrivercreator: resolving driver conf: %w", err)
 	}
 
-	pod := buildDriverPod(conf)
-	service := buildDriverService(conf)
-	configMap := buildDriverConfigMap(conf)
-	return &DriverResources{Pod: pod, ConfigMap: configMap, Service: service}, nil
+	res := &DriverResources{
+		Pod:       buildDriverPod(conf),
+		Service:   buildDriverService(conf),
+		ConfigMap: buildDriverConfigMap(conf),
+	}
+	if conf.hasExecPodTemplate {
+		res.PodSpecConfigMap = buildPodSpecConfigMap(conf)
+	}
+	return res, nil
 }
 
 // buildDriverPod runs the reproducible feature steps in Spark's order and folds
@@ -105,6 +132,10 @@ func buildDriverPod(conf *driverConf) *corev1.Pod {
 	steps := []featureStep{
 		newBasicDriverFeatureStep(conf),
 		newDriverKubernetesCredentialsFeatureStep(conf),
+		// PodTemplateConfigMapStep runs before LocalDirsFeatureStep in Spark's
+		// feature order, so the pod-template volume/mount precede the local-dir
+		// ones. It is a no-op when there is no executor template.
+		newPodTemplateConfigMapFeatureStep(conf),
 		newLocalDirsFeatureStep(conf),
 		newDriverCommandFeatureStep(conf),
 	}

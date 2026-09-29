@@ -1,0 +1,27 @@
+# Source-of-truth SparkApplication for the "sparkpi-podtemplate" oracle case.
+#
+# Models the classic operator submission path, which ALWAYS passes a synthesized
+# driver AND executor pod-template file to spark-submit (buildDriverPodTemplate /
+# buildExecutorPodTemplate). That triggers Spark's PodTemplateConfigMapStep, which
+# creates a 4th object — the executor pod-template ConfigMap — mounts it on the
+# driver, and sets spark.kubernetes.executor.podTemplateFile. It also builds the
+# driver pod on top of the driver template (fabric8 load + merge).
+#
+# The synthesized templates are the sibling driver-pod-template.yaml /
+# executor-pod-template.yaml (minimal: just the container, as the operator emits
+# for an app with no user Spec.{Driver,Executor}.Template). regen.sh points stock
+# spark-submit at those files via submit-args.txt; the Go builder consumes the same
+# files. Keep the three in sync.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: "__IMAGE__"
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: "__EXAMPLES_JAR__"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"

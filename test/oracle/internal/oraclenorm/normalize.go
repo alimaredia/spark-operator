@@ -168,17 +168,28 @@ func normalizeSparkProperties(obj map[string]any) {
 		return
 	}
 	lines := strings.Split(props, "\n")
-	for i, line := range lines {
+	out := lines[:0]
+	for _, line := range lines {
 		switch {
 		case propDateRe.MatchString(line):
-			lines[i] = "#" + PlaceholderDate
+			line = "#" + PlaceholderDate
 		case strings.HasPrefix(line, "spark.app.submitTime="):
-			lines[i] = "spark.app.submitTime=" + PlaceholderSubmitTime
+			line = "spark.app.submitTime=" + PlaceholderSubmitTime
 		case strings.HasPrefix(line, "spark.master="):
-			lines[i] = "spark.master=" + PlaceholderMaster
+			line = "spark.master=" + PlaceholderMaster
+		case strings.HasPrefix(line, "spark.kubernetes.driver.podTemplateFile="),
+			strings.HasPrefix(line, "spark.kubernetes.driver.podTemplateContainerName="):
+			// Submit-time pod-template file artifacts: a host-specific path and the
+			// container name that only matters while spark-submit reads the file. The
+			// native path applies the driver template in-process and emits neither, so
+			// drop these lines to keep the golden comparable. (The executor
+			// podTemplateFile is kept: Spark rewrites it to an in-pod mount path that
+			// is runtime-relevant and reproducible.)
+			continue
 		}
+		out = append(out, line)
 	}
-	data["spark.properties"] = strings.Join(lines, "\n")
+	data["spark.properties"] = strings.Join(out, "\n")
 }
 
 // normalizeSparkUserEnv pins the SPARK_USER env var on a driver pod's

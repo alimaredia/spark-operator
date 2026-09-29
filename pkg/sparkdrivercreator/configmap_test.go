@@ -29,7 +29,7 @@ import (
 )
 
 func TestBuildDriverConfigMap_Minimal(t *testing.T) {
-	conf, err := newDriverConf(minimalApp())
+	conf, err := newDriverConf(minimalApp(), BuildOptions{})
 	require.NoError(t, err)
 
 	cm := buildDriverConfigMap(conf)
@@ -73,7 +73,7 @@ func TestBuildDriverConfigMap_OverridesEmitStructuredKeys(t *testing.T) {
 			NodeSelector:   map[string]string{"disktype": "ssd"},
 		},
 	}
-	conf, err := newDriverConf(app)
+	conf, err := newDriverConf(app, BuildOptions{})
 	require.NoError(t, err)
 
 	props := buildDriverConfigMap(conf).Data[sparkPropertiesKey]
@@ -89,7 +89,7 @@ func TestBuildDriverConfigMap_OverridesEmitStructuredKeys(t *testing.T) {
 }
 
 func TestBuildSystemProperties_OmitsUnsetConditionals(t *testing.T) {
-	conf, err := newDriverConf(minimalApp())
+	conf, err := newDriverConf(minimalApp(), BuildOptions{})
 	require.NoError(t, err)
 
 	props := buildSystemProperties(conf)

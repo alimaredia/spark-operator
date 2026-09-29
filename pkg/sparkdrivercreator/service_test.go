@@ -30,7 +30,7 @@ import (
 )
 
 func TestBuildDriverService_Minimal(t *testing.T) {
-	conf, err := newDriverConf(minimalApp())
+	conf, err := newDriverConf(minimalApp(), BuildOptions{})
 	require.NoError(t, err)
 
 	svc := buildDriverService(conf)
@@ -73,7 +73,7 @@ func TestBuildDriverService_SelectorIncludesCustomLabels(t *testing.T) {
 	app.Spec.Driver = v1beta2.DriverSpec{SparkPodSpec: v1beta2.SparkPodSpec{
 		Labels: map[string]string{"env": "prod"},
 	}}
-	conf, err := newDriverConf(app)
+	conf, err := newDriverConf(app, BuildOptions{})
 	require.NoError(t, err)
 
 	svc := buildDriverService(conf)

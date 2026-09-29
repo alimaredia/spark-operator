@@ -36,6 +36,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
@@ -48,11 +49,24 @@ import (
 // golden files under golden/<ver>/.
 var sparkVersions = []string{"4.0.4"}
 
-// goldenObjectFiles are the per-case golden files, keyed by the Kind each holds.
-var goldenObjectFiles = map[string]string{
-	"Pod":       "driver-pod.json",
-	"ConfigMap": "configmap.json",
-	"Service":   "service.json",
+// goldenObject describes one per-case golden file and the Kind it holds. It is a
+// slice, not a Kind-keyed map, because a pod-template submission emits two
+// ConfigMaps (the driver conf map and the executor pod-template map). optional
+// files are only present for some cases and are skipped where absent.
+type goldenObject struct {
+	kind     string
+	file     string
+	optional bool
+}
+
+// goldenObjectFiles are the per-case golden files. The first three are produced
+// by every case; podspec-configmap.json only by cases that carry a pod template
+// (sparkpi-podtemplate).
+var goldenObjectFiles = []goldenObject{
+	{kind: "Pod", file: "driver-pod.json"},
+	{kind: "ConfigMap", file: "configmap.json"},
+	{kind: "Service", file: "service.json"},
+	{kind: "ConfigMap", file: "podspec-configmap.json", optional: true},
 }
 
 func imageFor(v string) string { return "spark:" + v }
@@ -81,17 +95,20 @@ func TestGoldenWellFormed(t *testing.T) {
 		for _, name := range cases {
 			t.Run(ver+"/"+name, func(t *testing.T) {
 				dir := filepath.Join("golden", ver, name)
-				for kind, file := range goldenObjectFiles {
-					raw, err := os.ReadFile(filepath.Join(dir, file))
-					require.NoError(t, err, "golden %s missing", file)
+				for _, g := range goldenObjectFiles {
+					raw, err := os.ReadFile(filepath.Join(dir, g.file))
+					if g.optional && os.IsNotExist(err) {
+						continue
+					}
+					require.NoError(t, err, "golden %s missing", g.file)
 
 					var obj map[string]any
-					require.NoError(t, json.Unmarshal(raw, &obj), "golden %s not valid JSON", file)
-					assert.Equal(t, kind, obj["kind"], "golden %s has wrong kind", file)
+					require.NoError(t, json.Unmarshal(raw, &obj), "golden %s not valid JSON", g.file)
+					assert.Equal(t, g.kind, obj["kind"], "golden %s has wrong kind", g.file)
 
 					for desc, re := range leftoverDynamicRes {
 						assert.Falsef(t, re.Match(raw),
-							"golden %s still contains an un-normalized %s", file, desc)
+							"golden %s still contains an un-normalized %s", g.file, desc)
 					}
 				}
 				// Normalization must have run: the driver service name always carries
@@ -117,8 +134,11 @@ func TestDriverSpecMatchesOracle(t *testing.T) {
 		for _, name := range discoverCases(t, ver) {
 			t.Run(ver+"/"+name, func(t *testing.T) {
 				app := loadApplication(t, name, ver)
+				opts := sparkdrivercreator.BuildOptions{
+					ExecutorPodTemplate: loadExecutorPodTemplate(t, name),
+				}
 
-				res, err := sparkdrivercreator.New().Build(app)
+				res, err := sparkdrivercreator.New().Build(app, opts)
 				require.NoError(t, err)
 				require.NotNil(t, res)
 				require.NotNil(t, res.Pod, "driver pod must always be built")
@@ -138,6 +158,7 @@ func TestDriverSpecMatchesOracle(t *testing.T) {
 					{"Pod", "driver-pod.json", res.Pod},
 					{"ConfigMap", "configmap.json", res.ConfigMap},
 					{"Service", "service.json", res.Service},
+					{"ConfigMap", "podspec-configmap.json", res.PodSpecConfigMap},
 				}
 				for _, o := range objects {
 					t.Run(o.kind, func(t *testing.T) {
@@ -181,6 +202,24 @@ func loadApplication(t *testing.T, name, ver string) *v1beta2.SparkApplication {
 	// drives the spark-version label the builder must emit.
 	app.Spec.SparkVersion = ver
 	return &app
+}
+
+// loadExecutorPodTemplate reads a case's executor-pod-template.yaml into a
+// PodTemplateSpec if it has one, mirroring the operator handing
+// buildExecutorPodTemplate's object to the builder. Cases without the file (the
+// stock minimal/overrides/operator cases) return nil, so no pod-template
+// ConfigMap is built. regen.sh feeds stock spark-submit the same file, so the two
+// sides consume identical input.
+func loadExecutorPodTemplate(t *testing.T, name string) *corev1.PodTemplateSpec {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("cases", name, "executor-pod-template.yaml"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	require.NoError(t, err)
+	var tpl corev1.PodTemplateSpec
+	require.NoError(t, yaml.Unmarshal(raw, &tpl), "decode %s/executor-pod-template.yaml", name)
+	return &tpl
 }
 
 // isNilObject reports whether obj is nil or a typed nil pointer. A nil field in
