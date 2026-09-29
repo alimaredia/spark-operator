@@ -53,31 +53,44 @@ go test ./test/oracle/
 ```
 
 - `TestGoldenWellFormed` guards the golden files (valid, fully normalized).
-- `TestDriverSpecMatchesOracle` is the differential test; it **skips** until
-  `SparkDriverCreator.Build` is implemented, then compares its output to golden.
+- `TestDriverSpecMatchesOracle` is the differential test; each captured object
+  (Pod, ConfigMap, Service) is its own subtest that compares `Build`'s output to
+  the golden, or **skips** if `Build` does not produce that object yet. All three
+  (Pod, ConfigMap, Service) pass today.
 
 ## Regenerating golden files (needs a JVM)
 
+Refreshing the goldens for a version **already** in the matrix — e.g. after a
+change to the normalization or the cases:
+
 ```sh
-test/oracle/setup-spark.sh 4.0.4        # one-time per version
-test/oracle/regen.sh                    # SPARK_VERSION defaults to 4.0.4
+test/oracle/setup-spark.sh 4.0.4        # one-time per version (skip if venv exists)
 SPARK_VERSION=4.0.4 test/oracle/regen.sh
 RAW_ONLY=1 test/oracle/regen.sh         # capture raw bodies only (debugging)
 ```
 
+`SPARK_VERSION` defaults to `4.0.4` if unset. This does **not** change which
+versions the test runs — that comes from `sparkVersions` in `oracle_test.go`.
+
 ## Adding a Spark version
 
-1. `test/oracle/setup-spark.sh 4.0.5`
-2. `SPARK_VERSION=4.0.5 test/oracle/regen.sh`
-3. Add `"4.0.5"` to `sparkVersions` in `oracle_test.go`.
+Same as regenerating above, plus one edit to register the version so the test
+actually runs it (versions are listed explicitly in `oracle_test.go`; a golden
+dir alone is ignored):
+
+1. Do everything in "Regenerating golden files" for the new version, e.g.
+   `test/oracle/setup-spark.sh 4.0.5 && SPARK_VERSION=4.0.5 test/oracle/regen.sh`.
+2. Add `"4.0.5"` to `sparkVersions` in `oracle_test.go`.
 
 The oracle is self-updating: the golden regenerates from Spark itself, so a new
-version is a few commands, not a hand-written expectation.
+version is a few commands plus one line, not a hand-written expectation.
 
 ## Normalization
 
 Per-submission values Spark randomizes/timestamps are replaced with stable
 placeholders by `internal/oraclenorm`, applied identically to the golden and the
 Go output (see that package for the catalogue: app id, resource prefix,
-ConfigMap id, local dir, submitTime, properties date, master URL). The golden
-object files are byte-identical across independent `spark-submit` runs.
+ConfigMap id, local dir, submitTime, properties date, master URL, SPARK_USER,
+and owner-reference uid — the last two are host/post-create values the pure-Go
+builder cannot reproduce). The golden object files are byte-identical across
+independent `spark-submit` runs.

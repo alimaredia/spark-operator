@@ -93,9 +93,8 @@ func (c *SparkDriverCreator) Build(app *v1beta2.SparkApplication) (*DriverResour
 
 	pod := buildDriverPod(conf)
 	service := buildDriverService(conf)
-	// TODO(sparkdrivercreator): assemble the driver ConfigMap (spark.properties).
-	// Until then it stays nil and the oracle skips that object.
-	return &DriverResources{Pod: pod, Service: service}, nil
+	configMap := buildDriverConfigMap(conf)
+	return &DriverResources{Pod: pod, ConfigMap: configMap, Service: service}, nil
 }
 
 // buildDriverPod runs the reproducible feature steps in Spark's order and folds

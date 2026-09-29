@@ -15,7 +15,7 @@ spec:
   sparkConf:
     spark.kubernetes.submission.waitAppCompletion: "false"
   driver:
-    cores: 1
+    coreRequest: "1"
     memory: 1g
     serviceAccount: spark
     labels:

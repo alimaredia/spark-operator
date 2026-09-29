@@ -44,6 +44,11 @@ const (
 	driverPodNameSuffix       = "-driver"
 	driverServiceSuffix       = "-driver-svc"
 	kubernetesDNSLabelMaxSize = 63
+
+	// defaultMaster is a representative in-cluster API-server URL. Stock
+	// spark-submit computes spark.master from the API-server env at submit time;
+	// the oracle normalizes it away, so the exact value is immaterial to Build.
+	defaultMaster = "k8s://https://kubernetes.default.svc:443"
 )
 
 // Port defaults. NOTE: connect-server port defaults to 0 on Spark 4.0.x (the
@@ -97,11 +102,19 @@ type driverConf struct {
 
 	// CPU. coresRequest is a raw quantity string (Spark keeps it as a string so
 	// fractional/milli values like "100m" round-trip); limitCores is optional.
-	cores        int32
-	coresRequest string
-	limitCores   string
+	// coresSet / coresRequestSet track whether the user supplied the value: the
+	// conf map emits spark.driver.cores / spark.kubernetes.driver.request.cores
+	// only for user-supplied values (spark-submit only serializes set confs).
+	cores           int32
+	coresSet        bool
+	coresRequest    string
+	coresRequestSet bool
+	limitCores      string
 
 	// Memory (MiB). memoryWithOverheadMiB is what the pod requests/limits.
+	// memory is the raw user string (e.g. "1g"); empty when unset, so the conf
+	// map emits spark.driver.memory only when the user supplied it.
+	memory                string
 	memoryMiB             int64
 	memoryOverheadMiB     int64
 	memoryWithOverheadMiB int64
@@ -121,6 +134,19 @@ type driverConf struct {
 	// (driver.serviceAccount); empty means unset (field omitted from the pod).
 	serviceAccount string
 
+	// driverLabelsCustom are the user-supplied driver labels (driver.labels),
+	// serialized as spark.kubernetes.driver.label.<k>. The preset spark-* labels
+	// are added to the pod directly and never appear as conf.
+	driverLabelsCustom map[string]string
+
+	// master is spark.master. Stock spark-submit derives it from the API server
+	// env at submit time; the oracle normalizes it away, so a representative
+	// default suffices for a reproducible build.
+	master string
+
+	// namespace the driver resources live in.
+	namespace string
+
 	// sparkConf is the raw user conf, consulted for port overrides.
 	sparkConf map[string]string
 }
@@ -139,7 +165,9 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 	}
 
 	memMiB := defaultDriverMemoryMiB
+	memory := ""
 	if driver.Memory != nil && *driver.Memory != "" {
+		memory = *driver.Memory
 		memMiB, err = parseMemoryMiB(*driver.Memory)
 		if err != nil {
 			return nil, fmt.Errorf("driver memory: %w", err)
@@ -151,12 +179,16 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 	}
 
 	cores := defaultDriverCores
+	coresSet := false
 	if driver.Cores != nil {
 		cores = *driver.Cores
+		coresSet = true
 	}
 	coresRequest := strconv.Itoa(int(cores))
+	coresRequestSet := false
 	if driver.CoreRequest != nil && *driver.CoreRequest != "" {
 		coresRequest = *driver.CoreRequest
+		coresRequestSet = true
 	}
 	limitCores := ""
 	if driver.CoreLimit != nil {
@@ -178,15 +210,21 @@ func newDriverConf(app *v1beta2.SparkApplication) (*driverConf, error) {
 		image:                 image,
 		imagePullPolicy:       defaultImagePullPolicy,
 		cores:                 cores,
+		coresSet:              coresSet,
 		coresRequest:          coresRequest,
+		coresRequestSet:       coresRequestSet,
 		limitCores:            limitCores,
+		memory:                memory,
 		memoryMiB:             memMiB,
 		memoryOverheadMiB:     overheadMiB,
 		memoryWithOverheadMiB: memMiB + overheadMiB,
 		annotations:           copyStringMap(driver.Annotations),
 		environment:           driverEnv(driver),
 		nodeSelector:          driverNodeSelector(app),
+		driverLabelsCustom:    copyStringMap(driver.Labels),
+		master:                defaultMaster,
 		sparkConf:             copyStringMap(app.Spec.SparkConf),
+		namespace:             app.Namespace,
 		appArgs:               append([]string(nil), app.Spec.Arguments...),
 	}
 	if app.Spec.MainClass != nil {
