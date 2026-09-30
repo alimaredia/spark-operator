@@ -219,6 +219,21 @@ func withOperatorSubmissionConf(app *v1beta2.SparkApplication) (*v1beta2.SparkAp
 		}
 	}
 
+	// Fold the driver's local-dir volume conf. Build reads driver volumes only from
+	// SparkConf (spark.kubernetes.driver.volumes.*), and the mutating webhook
+	// deliberately skips spark-local-dir-* volumes (Spark's LocalDirsFeatureStep owns
+	// them). Without this, the driver's local-dir volumes — and their emptyDir
+	// medium/sizeLimit — never reach the pod, and LocalDirsFeatureStep falls back to a
+	// bare default emptyDir. (Non-local-dir driver volumes still come from the webhook,
+	// and executor volumes are handled by executorVolumeMountsOption above.)
+	driverVolumeArgs, err := driverVolumeMountsOption(app)
+	if err != nil {
+		return nil, err
+	}
+	if err := foldConfArgs(out.Spec.SparkConf, driverVolumeArgs); err != nil {
+		return nil, err
+	}
+
 	// Python apps: fold the operator's typed Python fields that Build cannot read.
 	// pythonVersionOption mirrors the classic path's --conf translation; PyFiles is
 	// a spark-submit flag (--py-files) that spark-submit itself turns into the
