@@ -182,9 +182,9 @@ jobs:
           stage="${RUNNER_TEMP}/stage"
           mkdir -p "${stage}" "${RUNNER_TEMP}/dist"
           cp "${RUNNER_TEMP}/binary/spark-operator" "${stage}/"
-          cp LICENSE entrypoint.sh "${stage}/"
+          cp LICENSE "${stage}/"
           tar -czf "${RUNNER_TEMP}/dist/spark-operator_${VERSION}_linux_${ARCH}.tar.gz" \
-            -C "${stage}" spark-operator LICENSE entrypoint.sh
+            -C "${stage}" spark-operator LICENSE
 
       - name: Upload operator binary archive
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

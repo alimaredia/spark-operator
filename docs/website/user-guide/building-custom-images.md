@@ -14,8 +14,8 @@ Each GitHub release includes:
 
 | Artifact | Contents |
 | --- | --- |
-| `spark-operator_<version>_linux_amd64.tar.gz` | `spark-operator` binary `entrypoint.sh` and `LICENSE` |
-| `spark-operator_<version>_linux_arm64.tar.gz` | `spark-operator` binary `entrypoint.sh` and `LICENSE` |
+| `spark-operator_<version>_linux_amd64.tar.gz` | `spark-operator` binary and `LICENSE` |
+| `spark-operator_<version>_linux_arm64.tar.gz` | `spark-operator` binary and `LICENSE` |
 | `SHA256SUMS` | SHA-256 checksums for the archives above |
 
 The binaries are statically linked and carry the same version metadata as the official
@@ -39,42 +39,26 @@ tar -xzf "spark-operator_${VERSION}_linux_${ARCH}.tar.gz"
 
 ## Building a custom image
 
-The operator invokes `${SPARK_HOME}/bin/spark-submit` as a subprocess, so the runtime
-image must contain a Spark distribution and a JVM. The example below layers the released
-binary onto the official Spark image; substitute your own approved base as needed.
+The operator is a self-contained, statically linked Go binary. It submits Spark
+applications over the Kubernetes API (the native submitter) or to a REST submitter
+service — it no longer shells out to `spark-submit`, so the runtime image needs **no
+Spark distribution, no JVM, and no shell**. Spark itself is supplied entirely by the
+user's driver/executor image. The official image therefore builds on
+`gcr.io/distroless/static-debian12`, and a custom image can do the same.
 
 ```dockerfile
-ARG SPARK_VERSION=4.0.4
-ARG SPARK_IMAGE=docker.io/apache/spark:${SPARK_VERSION}
-FROM ${SPARK_IMAGE}
-
-ARG SPARK_UID=185
-ARG SPARK_GID=185
-
-USER root
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends catatonit \
-    && rm -rf /var/lib/apt/lists/*
-
-# The webhook Deployment runs this same image and mounts serving certs here.
-RUN mkdir -p /etc/k8s-webhook-server/serving-certs /home/spark \
-    && chmod -R g+rw /etc/k8s-webhook-server/serving-certs \
-    && chown -R "${SPARK_UID}:${SPARK_GID}" /etc/k8s-webhook-server/serving-certs /home/spark
+FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY spark-operator /usr/bin/spark-operator
-COPY entrypoint.sh /usr/bin/entrypoint.sh
 
-USER ${SPARK_UID}:${SPARK_GID}
-
-ENTRYPOINT ["/usr/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/spark-operator"]
 ```
 
-Override `SPARK_VERSION` to target a different Spark line, or `SPARK_IMAGE` to point at an
-approved internal base image. Pinning `SPARK_IMAGE` by digest, as the project's own
-`Dockerfile` does, is recommended for reproducible builds.
+Substitute your own approved base image as needed; any minimal base works, since the
+binary has no runtime dependencies. Pinning the base image by digest, as the project's
+own `Dockerfile` does, is recommended for reproducible builds.
 
-Save this as `Dockerfile` next to the extracted `spark-operator` and `entrypoint.sh`, then:
+Save this as `Dockerfile` next to the extracted `spark-operator`, then:
 
 ```bash
 docker build -t my-registry.example.com/spark-operator:${VERSION} .
@@ -82,21 +66,17 @@ docker build -t my-registry.example.com/spark-operator:${VERSION} .
 
 ### Requirements for a custom base image
 
-If you replace the Spark base image, the resulting image must still provide:
+The binary is built with `CGO_ENABLED=0`, so it has no dynamic library dependencies.
+If you replace the base image, the resulting image only needs to provide:
 
-- `SPARK_HOME` set, with a working `bin/spark-submit` and a JVM. The operator fails at
-  startup if `SPARK_HOME` is unset.
-- `bash`, since `entrypoint.sh` and `spark-submit` are Bash scripts.
-- `catatonit` on `PATH`. `spark-submit` forks child JVMs, and without a PID 1 reaper the
-  controller pod accumulates zombie processes.
-- `libnss_wrapper.so`, if you run on OpenShift. `entrypoint.sh` uses it to synthesize a
-  passwd entry under an arbitrary UID.
-- A writable, group-readable `/etc/k8s-webhook-server/serving-certs`, used by the webhook
-  Deployment.
+- CA certificates (for TLS to the Kubernetes API server). `distroless/static` and most
+  minimal bases already include these.
+- The webhook Deployment mounts its serving certificates at
+  `/etc/k8s-webhook-server/serving-certs` from a Secret volume at runtime, so no
+  directory needs to be created in the image.
 
-Changing the default UID/GID away from `185:185` may break existing Pod Security
-Admission policies and `securityContext` overrides, so keep it unless you have a reason
-not to.
+The chart runs the container as a non-root user with a read-only root filesystem and all
+capabilities dropped; a minimal static base image satisfies this by default.
 
 ## Using the image
 

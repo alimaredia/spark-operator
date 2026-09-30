@@ -14,16 +14,18 @@
 # limitations under the License.
 #
 
-ARG SPARK_IMAGE=docker.io/apache/spark:4.0.4@sha256:94ad730f7510002d8a1615de269f27cdeca4d4eef51657384db3fa9246b5a4d8
-
 FROM docker.io/library/golang:1.25.11@sha256:00feed335fe561979f2cdcc30a5191231977c5631fe79c40f7d3ab63b4fa222f AS builder
 
 WORKDIR /workspace
 
-RUN --mount=type=cache,target=/go/pkg/mod/ \
-    --mount=type=bind,source=go.mod,target=go.mod \
-    --mount=type=bind,source=go.sum,target=go.sum \
-    go mod download
+# Copy the module manifests and download dependencies first, so this layer is
+# cached unless go.mod/go.sum change. (COPY rather than a context bind mount so
+# the build works under both Docker/BuildKit and rootless Podman/buildah, which
+# cannot read bind-mounted context files.) The module cache is baked into this
+# image layer rather than a --mount=type=cache: under Podman/buildah a module
+# cache populated in this RUN is not reliably visible to the build RUN below.
+COPY go.mod go.sum ./
+RUN go mod download
 
 COPY . .
 
@@ -38,9 +40,7 @@ ARG GIT_COMMIT=
 ARG GIT_TREE_STATE=
 ARG SOURCE_DATE_EPOCH=
 
-RUN --mount=type=cache,target=/go/pkg/mod/ \
-    --mount=type=cache,target="/root/.cache/go-build" \
-    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} GO111MODULE=on \
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} GO111MODULE=on \
     make build-operator \
       ${VERSION:+VERSION=$VERSION} \
       ${GIT_COMMIT:+GIT_COMMIT=$GIT_COMMIT} \
@@ -53,26 +53,14 @@ RUN --mount=type=cache,target=/go/pkg/mod/ \
 FROM scratch AS artifacts
 COPY --from=builder /workspace/bin/spark-operator /spark-operator
 
-FROM ${SPARK_IMAGE}
-
-ARG SPARK_UID=185
-
-ARG SPARK_GID=185
-
-USER root
-
-RUN apt-get update \
-    && apt-get install -y catatonit \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /etc/k8s-webhook-server/serving-certs /home/spark && \
-    chmod -R g+rw /etc/k8s-webhook-server/serving-certs && \
-    chown -R spark /etc/k8s-webhook-server/serving-certs /home/spark
-
-USER ${SPARK_UID}:${SPARK_GID}
+# Runtime image. The operator is a fully static (CGO_ENABLED=0) Go binary and no
+# longer shells out to spark-submit on the native/REST submission paths, so it
+# needs neither Spark nor a JVM at runtime — Spark is supplied entirely by the
+# user's driver/executor image. distroless/static gives us just libc-free glibc
+# bits, CA certificates, and tzdata, running as the built-in nonroot user (65532).
+# No shell, no package manager: nothing for the operator's CVE surface to inherit.
+FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /workspace/bin/spark-operator /usr/bin/spark-operator
 
-COPY entrypoint.sh /usr/bin/
-
-ENTRYPOINT ["/usr/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/spark-operator"]
