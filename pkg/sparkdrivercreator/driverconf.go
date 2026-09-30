@@ -20,7 +20,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"os/user"
 	"regexp"
 	"strconv"
@@ -36,15 +35,19 @@ import (
 // These mirror the values BasicDriverFeatureStep reads out of KubernetesDriverConf
 // when the user leaves them unset.
 const (
-	defaultDriverCores        = int32(1)    // spark.driver.cores
-	defaultDriverMemoryMiB    = int64(1024) // spark.driver.memory (1g)
-	driverMinMemOverheadMiB   = int64(384)  // spark.driver.minMemoryOverhead
-	memoryOverheadFactor      = 0.1         // spark.driver.memoryOverheadFactor (JVM apps)
-	defaultDriverContainerNm  = "spark-kubernetes-driver"
-	defaultImagePullPolicy    = corev1.PullIfNotPresent
-	driverPodNameSuffix       = "-driver"
-	driverServiceSuffix       = "-driver-svc"
-	kubernetesDNSLabelMaxSize = 63
+	defaultDriverCores      = int32(1)    // spark.driver.cores
+	defaultDriverMemoryMiB  = int64(1024) // spark.driver.memory (1g)
+	driverMinMemOverheadMiB = int64(384)  // spark.driver.minMemoryOverhead
+	// Default memory overhead factors from Spark's BasicDriverFeatureStep: JVM
+	// apps use 0.1, non-JVM (Python/R) apps 0.4, unless the user overrides
+	// spark.kubernetes.memoryOverheadFactor.
+	jvmMemoryOverheadFactor    = 0.1
+	nonJVMMemoryOverheadFactor = 0.4
+	defaultDriverContainerNm   = "spark-kubernetes-driver"
+	defaultImagePullPolicy     = corev1.PullIfNotPresent
+	driverPodNameSuffix        = "-driver"
+	driverServiceSuffix        = "-driver-svc"
+	kubernetesDNSLabelMaxSize  = 63
 
 	// defaultMaster is a representative in-cluster API-server URL. Stock
 	// spark-submit computes spark.master from the API-server env at submit time;
@@ -70,6 +73,19 @@ const (
 	confBlockManagerPort = "spark.blockManager.port"
 	confUIPort           = "spark.ui.port"
 	confConnectPort      = "spark.connect.grpc.binding.port"
+)
+
+// Python application entry point and interpreter conf keys. Spark forces the
+// driver main class to PythonRunner for a k8s cluster-mode Python app (see
+// SparkSubmit's isKubernetesCluster branch), and DriverCommandFeatureStep sets
+// the PySpark interpreter env vars from these confs.
+const (
+	pythonRunnerMainClass       = "org.apache.spark.deploy.PythonRunner"
+	confPysparkPython           = "spark.pyspark.python"
+	confPysparkDriverPython     = "spark.pyspark.driver.python"
+	confDriverMemOverheadFactor = "spark.driver.memoryOverheadFactor"
+	envPysparkPython            = "PYSPARK_PYTHON"
+	envPysparkDriverPython      = "PYSPARK_DRIVER_PYTHON"
 )
 
 // appNameSanitizeRe matches everything not allowed in a DNS-label-ish name.
@@ -100,10 +116,16 @@ type driverConf struct {
 	// from the random prefix), this may be a fixed value.
 	driverPodName string
 
-	// Application entry point (JVM/Scala apps only in this subset).
-	mainClass       string
-	mainAppResource string
-	appArgs         []string
+	// Application entry point. resourceType is spark.kubernetes.resource.type
+	// (java|python|r), derived from the SparkApplication's type. For Python apps
+	// mainClass is forced to PythonRunner (Spark does this in spark-submit) and the
+	// PySpark interpreter env vars are resolved from conf; both are empty otherwise.
+	resourceType        string
+	mainClass           string
+	mainAppResource     string
+	appArgs             []string
+	pysparkPython       string // PYSPARK_PYTHON env value ("" = unset, env var omitted)
+	pysparkDriverPython string // PYSPARK_DRIVER_PYTHON env value ("" = unset)
 
 	// Image.
 	image           string
@@ -127,6 +149,10 @@ type driverConf struct {
 	memoryMiB             int64
 	memoryOverheadMiB     int64
 	memoryWithOverheadMiB int64
+	// memoryOverheadFactor is the resolved default overhead factor Spark serializes
+	// as spark.kubernetes.memoryOverheadFactor: 0.1 for JVM, 0.4 for non-JVM apps,
+	// or the user's spark.kubernetes.memoryOverheadFactor override.
+	memoryOverheadFactor float64
 
 	// Metadata / scheduling.
 	labels        map[string]string
@@ -205,6 +231,11 @@ func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverCon
 		return nil, err
 	}
 
+	resourceType, err := resolveResourceType(app.Spec.Type)
+	if err != nil {
+		return nil, err
+	}
+
 	memMiB := defaultDriverMemoryMiB
 	memory := ""
 	if driver.Memory != nil && *driver.Memory != "" {
@@ -214,7 +245,8 @@ func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverCon
 			return nil, fmt.Errorf("driver memory: %w", err)
 		}
 	}
-	overheadMiB, err := resolveMemoryOverheadMiB(driver, memMiB)
+	overheadFactor := resolveDefaultOverheadFactor(resourceType, app.Spec.SparkConf)
+	overheadMiB, err := resolveMemoryOverheadMiB(driver, app.Spec.SparkConf, memMiB, overheadFactor)
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +296,8 @@ func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverCon
 		memoryMiB:             memMiB,
 		memoryOverheadMiB:     overheadMiB,
 		memoryWithOverheadMiB: memMiB + overheadMiB,
+		memoryOverheadFactor:  overheadFactor,
+		resourceType:          resourceType,
 		annotations:           copyStringMap(driver.Annotations),
 		environment:           driverEnv(driver),
 		nodeSelector:          driverNodeSelector(app),
@@ -273,7 +307,14 @@ func newDriverConf(app *v1beta2.SparkApplication, opts BuildOptions) (*driverCon
 		namespace:             app.Namespace,
 		appArgs:               append([]string(nil), app.Spec.Arguments...),
 	}
-	if app.Spec.MainClass != nil {
+	// Resolve the driver main class. For a Python app Spark forces
+	// org.apache.spark.deploy.PythonRunner (SparkSubmit's isKubernetesCluster
+	// branch emits --main-class PythonRunner regardless of any user main class),
+	// and DriverCommandFeatureStep resolves the PySpark interpreter env vars.
+	if resourceType == resourceTypePython {
+		c.mainClass = pythonRunnerMainClass
+		c.pysparkPython, c.pysparkDriverPython = resolvePysparkEnv(c.sparkConf)
+	} else if app.Spec.MainClass != nil {
 		c.mainClass = *app.Spec.MainClass
 	}
 	if app.Spec.MainApplicationFile != nil {
@@ -361,9 +402,59 @@ func resolveImage(app *v1beta2.SparkApplication) (string, error) {
 	return "", fmt.Errorf("sparkdrivercreator: must specify a driver container image")
 }
 
-// resolveMemoryOverheadMiB mirrors BasicDriverFeatureStep's overhead math for
-// JVM apps: an explicit memoryOverhead wins; otherwise max(factor*mem, minimum).
-func resolveMemoryOverheadMiB(driver v1beta2.DriverSpec, memMiB int64) (int64, error) {
+// resolveResourceType maps the SparkApplication type to Spark's
+// spark.kubernetes.resource.type. Scala/Java (and the unset default) are "java";
+// Python is "python". R is not yet reproduced by the native submitter, so it is
+// rejected rather than silently mislaunched as a JVM app.
+func resolveResourceType(appType v1beta2.SparkApplicationType) (string, error) {
+	switch appType {
+	case v1beta2.SparkApplicationTypeJava, v1beta2.SparkApplicationTypeScala, "":
+		return resourceTypeJava, nil
+	case v1beta2.SparkApplicationTypePython:
+		return resourceTypePython, nil
+	case v1beta2.SparkApplicationTypeR:
+		return "", fmt.Errorf("sparkdrivercreator: R applications are not supported by the native submitter")
+	default:
+		return "", fmt.Errorf("sparkdrivercreator: unsupported application type %q", appType)
+	}
+}
+
+// resolvePysparkEnv mirrors DriverCommandFeatureStep.configureForPython's
+// interpreter resolution: PYSPARK_PYTHON from spark.pyspark.python, and
+// PYSPARK_DRIVER_PYTHON from spark.pyspark.driver.python falling back to
+// spark.pyspark.python. Unlike Spark it does not consult the submitter's OS
+// environment — the native path must be reproducible from the CRD alone — so an
+// unset interpreter yields "" and the env var is omitted.
+func resolvePysparkEnv(sparkConf map[string]string) (pysparkPython, pysparkDriverPython string) {
+	pysparkPython = sparkConf[confPysparkPython]
+	pysparkDriverPython = sparkConf[confPysparkDriverPython]
+	if pysparkDriverPython == "" {
+		pysparkDriverPython = pysparkPython
+	}
+	return pysparkPython, pysparkDriverPython
+}
+
+// resolveDefaultOverheadFactor returns Spark BasicDriverFeatureStep's
+// defaultOverheadFactor — the value serialized as spark.kubernetes.memoryOverheadFactor:
+// the user's spark.kubernetes.memoryOverheadFactor override if set, else 0.1 for
+// JVM apps and 0.4 for non-JVM (Python/R) apps.
+func resolveDefaultOverheadFactor(resourceType string, sparkConf map[string]string) float64 {
+	if v, ok := sparkConf[confMemoryOverheadFactor]; ok && v != "" {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return f
+		}
+	}
+	if resourceType == resourceTypeJava {
+		return jvmMemoryOverheadFactor
+	}
+	return nonJVMMemoryOverheadFactor
+}
+
+// resolveMemoryOverheadMiB mirrors BasicDriverFeatureStep's overhead math: an
+// explicit spark.driver.memoryOverhead wins; otherwise max(factor*mem, minimum),
+// where the factor prefers spark.driver.memoryOverheadFactor over the resolved
+// default (0.1 JVM / 0.4 non-JVM). Spark truncates factor*mem to an int.
+func resolveMemoryOverheadMiB(driver v1beta2.DriverSpec, sparkConf map[string]string, memMiB int64, defaultFactor float64) (int64, error) {
 	if driver.MemoryOverhead != nil && *driver.MemoryOverhead != "" {
 		v, err := parseMemoryMiB(*driver.MemoryOverhead)
 		if err != nil {
@@ -371,7 +462,13 @@ func resolveMemoryOverheadMiB(driver v1beta2.DriverSpec, memMiB int64) (int64, e
 		}
 		return v, nil
 	}
-	factored := int64(math.Floor(memoryOverheadFactor * float64(memMiB)))
+	factor := defaultFactor
+	if v, ok := sparkConf[confDriverMemOverheadFactor]; ok && v != "" {
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			factor = f
+		}
+	}
+	factored := int64(factor * float64(memMiB))
 	if factored > driverMinMemOverheadMiB {
 		return factored, nil
 	}

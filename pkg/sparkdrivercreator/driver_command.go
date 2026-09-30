@@ -16,15 +16,17 @@ limitations under the License.
 
 package sparkdrivercreator
 
+import corev1 "k8s.io/api/core/v1"
+
 // sparkConfPath is where the conf volume's spark.properties lands in the driver
 // container; DriverCommandFeatureStep points --properties-file at it.
 const sparkConfPath = "/opt/spark/conf/spark.properties"
 
-// driverCommandFeatureStep ports the JVM branch of Spark's
-// DriverCommandFeatureStep: it sets the driver container's args to the
-// spark-internal "driver" launcher invocation. Python/R apps take a different
-// branch and are out of scope (rejected by the deny-list), so only the JVM
-// resource form is produced here.
+// driverCommandFeatureStep ports Spark's DriverCommandFeatureStep: it sets the
+// driver container's args to the spark-internal "driver" launcher invocation.
+// The Java and Python branches share the same argument shape (the main class is
+// resolved upstream — PythonRunner for Python), and the Python branch also adds
+// the PySpark interpreter env vars. R apps are rejected before Build.
 type driverCommandFeatureStep struct {
 	conf *driverConf
 }
@@ -47,12 +49,32 @@ func (s *driverCommandFeatureStep) configurePod(in sparkPod) sparkPod {
 	}
 	args = append(args, "--properties-file", sparkConfPath)
 	args = append(args, "--class", c.mainClass)
-	// renameMainAppResource with shouldUploadLocal=false leaves a local:/// (or
-	// other non-uploadable) resource untouched, so we emit it verbatim.
+	// renameMainAppResource leaves a local:// (or other non-uploadable) resource
+	// untouched for both the Java (shouldUploadLocal=false) and Python
+	// (shouldUploadLocal=true) branches, so we emit it verbatim.
 	args = append(args, c.mainAppResource)
 	args = append(args, c.appArgs...)
 
 	container.Args = args
 
+	// Python apps: configureForPython also sets the PySpark interpreter env vars,
+	// skipping any that resolve to empty (KubernetesUtils.buildEnvVars drops nulls).
+	if c.resourceType == resourceTypePython {
+		container.Env = append(container.Env, pysparkEnvVars(c)...)
+	}
+
 	return sparkPod{pod: pod, container: container}
+}
+
+// pysparkEnvVars returns the PYSPARK_PYTHON / PYSPARK_DRIVER_PYTHON env vars for a
+// Python driver, omitting any whose interpreter path is unset.
+func pysparkEnvVars(c *driverConf) []corev1.EnvVar {
+	var env []corev1.EnvVar
+	if c.pysparkPython != "" {
+		env = append(env, corev1.EnvVar{Name: envPysparkPython, Value: c.pysparkPython})
+	}
+	if c.pysparkDriverPython != "" {
+		env = append(env, corev1.EnvVar{Name: envPysparkDriverPython, Value: c.pysparkDriverPython})
+	}
+	return env
 }

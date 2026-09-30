@@ -41,6 +41,7 @@ package sparkapplication
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -48,6 +49,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
+	"github.com/kubeflow/spark-operator/v2/pkg/common"
 	"github.com/kubeflow/spark-operator/v2/pkg/sparkdrivercreator"
 	"github.com/kubeflow/spark-operator/v2/pkg/util"
 )
@@ -73,6 +75,17 @@ func NewNativeSparkSubmitter(c client.Client) *NativeSparkSubmitter {
 
 // Submit implements SparkApplicationSubmitter interface.
 func (s *NativeSparkSubmitter) Submit(ctx context.Context, app *v1beta2.SparkApplication) error {
+	// Fold in the submission-time configuration the operator normally injects via
+	// buildSparkSubmitArgs but that Build does not reproduce: the deterministic
+	// driver pod name, the driver tracking labels, and the full executor conf
+	// surface (Build never reads app.Spec.Executor). Operates on a copy so the
+	// caller's object is not mutated.
+	preparedApp, err := withOperatorSubmissionConf(app)
+	if err != nil {
+		return fmt.Errorf("failed to prepare native submission for %s/%s: %w", app.Namespace, app.Name, err)
+	}
+	app = preparedApp
+
 	res, err := s.creator.Build(app, sparkdrivercreator.BuildOptions{
 		ExecutorPodTemplate: buildExecutorPodTemplate(app),
 	})
@@ -126,6 +139,128 @@ func (s *NativeSparkSubmitter) Submit(ctx context.Context, app *v1beta2.SparkApp
 		"driverPod", pod.Name,
 		"driverPodUID", pod.UID,
 	)
+	return nil
+}
+
+// executorConfOptionFuncs are the operator's submission-time executor argument
+// builders. Build (pkg/sparkdrivercreator) never reads app.Spec.Executor, so the
+// native path folds these confs in itself to reach parity with the classic
+// spark-submit path. Reusing the operator's own builders (same package) keeps the
+// native path from drifting from classic submission.
+var executorConfOptionFuncs = []func(*v1beta2.SparkApplication) ([]string, error){
+	executorConfOption,         // labels, instances, image, cores, memory, service account, annotations, secretKeyRefs, java opts, ...
+	executorEnvOption,          // spark.executorEnv.*
+	executorSecretOption,       // spark.kubernetes.executor.secrets.* (+ credential env)
+	executorVolumeMountsOption, // spark.kubernetes.executor.volumes.* (local-dir volumes only)
+}
+
+// withOperatorSubmissionConf returns a copy of app with the submission-time
+// configuration the operator injects via buildSparkSubmitArgs folded in, so the
+// pure-Go Build reproduces what the classic spark-submit path produces. It covers
+// exactly the parts Build would otherwise miss (driver typed fields are already
+// translated inside Build; the mutating webhook still applies CRD pod-customization):
+//
+//   - Deterministic driver pod name. The classic path sets
+//     spark.kubernetes.driver.pod.name (driverPodNameOption) and the reconciler
+//     tracks the driver pod by exactly that name (getDriverPod -> GetDriverPodName).
+//     Without it, Build defaults to a random "<prefix>-driver" name that the
+//     reconciler can never find. Injected as a conf so it becomes a Build input
+//     (owned resources' owner references point at conf.driverPodName, so the name
+//     must be fixed before Build, not renamed after).
+//
+//   - Driver tracking labels. The classic path stamps these on the driver pod
+//     (driverConfOption): app-name, launched-by-spark-operator, submission-id, and
+//     conditionally mutated-by-spark-operator. They keep the native driver pod
+//     label-consistent with the classic path — including matching the mutating
+//     webhook's objectSelector (launched-by-spark-operator=true), so the pod is
+//     admitted to the same webhook. Set on Spec.Driver.Labels because that is the
+//     typed map Build stamps onto the pod (and echoes into spark.properties as
+//     spark.kubernetes.driver.label.*), matching the classic conf output.
+//
+//   - The full executor conf surface. Build never reads app.Spec.Executor, so none
+//     of the typed executor fields (image, cores, memory, instances, service
+//     account, labels, annotations, secrets, env, local-dir volumes, ...) would
+//     otherwise reach the executors — they would launch with Spark defaults. These
+//     confs are injected into SparkConf (not the typed Executor spec, which Build
+//     ignores) so they flow through Build's conf passthrough into spark.properties;
+//     the driver's scheduler then applies them to every executor pod it creates.
+//     This also carries the executor tracking labels the reconciler lists executors
+//     by (getExecutorPods -> GetResourceLabels: app-name + submission-id).
+func withOperatorSubmissionConf(app *v1beta2.SparkApplication) (*v1beta2.SparkApplication, error) {
+	out := app.DeepCopy()
+
+	if out.Spec.SparkConf == nil {
+		out.Spec.SparkConf = make(map[string]string)
+	}
+	out.Spec.SparkConf[common.SparkKubernetesDriverPodName] = util.GetDriverPodName(app)
+
+	if out.Spec.Driver.Labels == nil {
+		out.Spec.Driver.Labels = make(map[string]string)
+	}
+	out.Spec.Driver.Labels[common.LabelSparkAppName] = app.Name
+	out.Spec.Driver.Labels[common.LabelLaunchedBySparkOperator] = "true"
+	out.Spec.Driver.Labels[common.LabelSubmissionID] = app.Status.SubmissionID
+	// Mirror driverConfOption: pods without a driver pod template need the webhook
+	// to apply CRD-driven fields, so they are flagged for mutation.
+	if util.CompareSemanticVersion(app.Spec.SparkVersion, "3.0.0") < 0 || app.Spec.Driver.Template == nil {
+		out.Spec.Driver.Labels[common.LabelMutatedBySparkOperator] = "true"
+	}
+
+	// Fold the operator's executor confs into SparkConf. These are keyed off the
+	// original app's typed executor spec and, like spark-submit's later --conf args,
+	// take precedence over any duplicate the user set directly in SparkConf.
+	for _, optionFunc := range executorConfOptionFuncs {
+		args, err := optionFunc(app)
+		if err != nil {
+			return nil, err
+		}
+		if err := foldConfArgs(out.Spec.SparkConf, args); err != nil {
+			return nil, err
+		}
+	}
+
+	// Python apps: fold the operator's typed Python fields that Build cannot read.
+	// pythonVersionOption mirrors the classic path's --conf translation; PyFiles is
+	// a spark-submit flag (--py-files) that spark-submit itself turns into the
+	// spark.submit.pyFiles conf, so translate it here for the native path.
+	if app.Spec.Type == v1beta2.SparkApplicationTypePython {
+		args, err := pythonVersionOption(app)
+		if err != nil {
+			return nil, err
+		}
+		if err := foldConfArgs(out.Spec.SparkConf, args); err != nil {
+			return nil, err
+		}
+		if len(app.Spec.Deps.PyFiles) > 0 {
+			out.Spec.SparkConf[confSparkSubmitPyFiles] = strings.Join(app.Spec.Deps.PyFiles, ",")
+		}
+	}
+
+	return out, nil
+}
+
+// confSparkSubmitPyFiles is the Spark conf spark-submit derives from --py-files;
+// the native path sets it directly from the CRD's deps.pyFiles.
+const confSparkSubmitPyFiles = "spark.submit.pyFiles"
+
+// foldConfArgs parses a spark-submit-style ["--conf", "key=value", ...] slice
+// (as produced by the operator's *Option builders) into dst, overwriting on
+// collision to mirror spark-submit's last-conf-wins merge.
+func foldConfArgs(dst map[string]string, args []string) error {
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--conf" {
+			continue
+		}
+		i++
+		if i >= len(args) {
+			return fmt.Errorf("malformed conf args: %q not followed by a value", "--conf")
+		}
+		key, value, ok := strings.Cut(args[i], "=")
+		if !ok {
+			return fmt.Errorf("malformed conf %q: expected key=value", args[i])
+		}
+		dst[key] = value
+	}
 	return nil
 }
 

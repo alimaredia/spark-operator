@@ -15,6 +15,12 @@ controller:
   kubeAPIBurst: 100
   driverPodDisruptionBudget:
     enable: true
+  # Submit SparkApplications via the pure-Go native submitter (no spark-submit/JVM).
+  # Native supports Scala/Java and Python cluster-mode apps (incl. the Python-based
+  # spark_ui_test); R apps are not yet reproduced and are rejected at build time.
+  featureGates:
+    - name: NativeSubmitter
+      enabled: true
 
 webhook:
   kubeAPIQPS: 100

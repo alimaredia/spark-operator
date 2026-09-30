@@ -121,6 +121,26 @@ in the matrix:
   secret — no API object. No new golden file; the effect is in `driver-pod.json` (the
   two credential env vars + the two secret volumes/mounts) and `configmap.json`.
 
+- **`sparkpi-python`** — a PySpark cluster-mode submit (`type: Python`), pinning
+  Spark's Python branch of `DriverCommandFeatureStep` and the non-JVM path of
+  `BasicDriverFeatureStep`. Unlike the JVM cases it sets no `--class`: spark-submit
+  forces `org.apache.spark.deploy.PythonRunner` for a Python primary resource
+  (`spark.kubernetes.resource.type=python`). Three things diverge from a Scala
+  submit and are pinned here: the driver memory-overhead factor defaults to **0.4**
+  (non-JVM) rather than 0.1 (`spark.kubernetes.memoryOverheadFactor=0.4`); the
+  `.py` primary resource is **not** auto-added to `spark.jars` (SparkSubmit adds the
+  primary resource to `spark.jars` only for JVM apps — a Python file "is already
+  distributed as a regular file"), so `configmap.json` has no `spark.jars` line; and
+  the driver gets `PYSPARK_PYTHON` / `PYSPARK_DRIVER_PYTHON` env vars. The case sets
+  `spark.pyspark.python` so those env vars are deterministic (Spark reads the conf
+  before the submit host's OS env, and `PYSPARK_DRIVER_PYTHON` falls back to it), and
+  because `DriverCommandFeatureStep` runs before `LocalDirsFeatureStep`, the PySpark
+  env vars precede `SPARK_LOCAL_DIRS` in `driver-pod.json`. The primary resource is a
+  `local://` URI (left verbatim by `renameMainAppResource`, so no upload and a
+  deterministic golden). Operator-only Python fields — `deps.pyFiles`
+  (`spark.submit.pyFiles`) and `pythonVersion` — are folded by the native adapter,
+  not read by `Build`, so this stock-spark-submit case intentionally omits them.
+
 - **`sparkpi-hadoopconf`** — Spark's `HadoopConfDriverFeatureStep` in its
   pre-existing-ConfigMap mode. When `spark.kubernetes.hadoop.configMapName` names an
   existing ConfigMap, Spark mounts it on the driver as the Hadoop config dir: a pod

@@ -144,11 +144,16 @@ func buildDriverPod(conf *driverConf) *corev1.Pod {
 		// without referenced secrets and create no API object (the Secrets pre-exist).
 		newMountSecretsFeatureStep(conf),
 		newEnvSecretsFeatureStep(conf),
-		// MountVolumesFeatureStep runs before PodTemplateConfigMapStep and
-		// LocalDirsFeatureStep in Spark's feature order, so driver-volume mounts
-		// precede the pod-template and local-dir ones. No-op without driver volumes.
+		// MountVolumesFeatureStep runs before DriverCommandFeatureStep in Spark's
+		// feature order, so driver-volume mounts precede any command-added env.
+		// No-op without driver volumes.
 		newMountVolumesFeatureStep(conf),
-		// HadoopConfDriverFeatureStep runs after MountVolumes and before
+		// DriverCommandFeatureStep runs immediately after MountVolumes in Spark's
+		// feature order (KubernetesDriverBuilder) and before HadoopConf/LocalDirs, so
+		// a Python app's PYSPARK_* env vars precede HADOOP_CONF_DIR and SPARK_LOCAL_DIRS.
+		// The Java branch adds only container args, so its position is immaterial.
+		newDriverCommandFeatureStep(conf),
+		// HadoopConfDriverFeatureStep runs after DriverCommand and before
 		// PodTemplateConfigMap/LocalDirs in Spark's feature order, so the HADOOP_CONF_DIR
 		// env precedes SPARK_LOCAL_DIRS. No-op unless a Hadoop config ConfigMap is named.
 		newHadoopConfFeatureStep(conf),
@@ -157,7 +162,6 @@ func buildDriverPod(conf *driverConf) *corev1.Pod {
 		// ones. It is a no-op when there is no executor template.
 		newPodTemplateConfigMapFeatureStep(conf),
 		newLocalDirsFeatureStep(conf),
-		newDriverCommandFeatureStep(conf),
 	}
 
 	sp := initialSparkPod()

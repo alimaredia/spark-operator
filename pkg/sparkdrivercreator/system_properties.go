@@ -25,32 +25,33 @@ import (
 // are Spark's own conf keys (not the operator's), because the ConfigMap must
 // match what stock spark-submit writes; see the test/oracle differential test.
 const (
-	confAppID                  = "spark.app.id"
-	confAppName                = "spark.app.name"
-	confAppSubmitTime          = "spark.app.submitTime"
-	confDriverHost             = "spark.driver.host"
-	confDriverMemory           = "spark.driver.memory"
-	confDriverCores            = "spark.driver.cores"
-	confJars                   = "spark.jars"
-	confContainerImage         = "spark.kubernetes.container.image"
-	confDriverRequestCores     = "spark.kubernetes.driver.request.cores"
-	confDriverLimitCores       = "spark.kubernetes.driver.limit.cores"
-	confDriverPodName          = "spark.kubernetes.driver.pod.name"
-	confServiceAccountName     = "spark.kubernetes.authenticate.driver.serviceAccountName"
-	confMemoryOverheadFactor   = "spark.kubernetes.memoryOverheadFactor"
-	confNamespace              = "spark.kubernetes.namespace"
-	confResourceType           = "spark.kubernetes.resource.type"
-	confSubmitInDriver         = "spark.kubernetes.submitInDriver"
-	confMaster                 = "spark.master"
-	confDeployMode             = "spark.submit.deployMode"
-	confPyFiles                = "spark.submit.pyFiles"
-	confDriverLabelPrefix      = "spark.kubernetes.driver.label."
-	confDriverEnvPrefix        = "spark.kubernetes.driverEnv."
-	confNodeSelectorPrefix     = "spark.kubernetes.node.selector."
-	memoryOverheadFactorString = "0.1"
-	deployModeCluster          = "cluster"
-	resourceTypeJava           = "java"
-	driverHostSuffix           = ".svc"
+	confAppID                = "spark.app.id"
+	confAppName              = "spark.app.name"
+	confAppSubmitTime        = "spark.app.submitTime"
+	confDriverHost           = "spark.driver.host"
+	confDriverMemory         = "spark.driver.memory"
+	confDriverCores          = "spark.driver.cores"
+	confJars                 = "spark.jars"
+	confContainerImage       = "spark.kubernetes.container.image"
+	confDriverRequestCores   = "spark.kubernetes.driver.request.cores"
+	confDriverLimitCores     = "spark.kubernetes.driver.limit.cores"
+	confDriverPodName        = "spark.kubernetes.driver.pod.name"
+	confServiceAccountName   = "spark.kubernetes.authenticate.driver.serviceAccountName"
+	confMemoryOverheadFactor = "spark.kubernetes.memoryOverheadFactor"
+	confNamespace            = "spark.kubernetes.namespace"
+	confResourceType         = "spark.kubernetes.resource.type"
+	confSubmitInDriver       = "spark.kubernetes.submitInDriver"
+	confMaster               = "spark.master"
+	confDeployMode           = "spark.submit.deployMode"
+	confPyFiles              = "spark.submit.pyFiles"
+	confDriverLabelPrefix    = "spark.kubernetes.driver.label."
+	confDriverEnvPrefix      = "spark.kubernetes.driverEnv."
+	confNodeSelectorPrefix   = "spark.kubernetes.node.selector."
+	deployModeCluster        = "cluster"
+	resourceTypeJava         = "java"
+	resourceTypePython       = "python"
+	resourceTypeR            = "r"
+	driverHostSuffix         = ".svc"
 )
 
 // buildSystemProperties assembles the driver's resolved system properties — the
@@ -74,14 +75,26 @@ func buildSystemProperties(c *driverConf) map[string]string {
 	props[confAppSubmitTime] = strconv.FormatInt(time.Now().UnixMilli(), 10)
 	props[confMaster] = c.master
 	props[confDeployMode] = deployModeCluster
-	props[confPyFiles] = ""
-	props[confResourceType] = resourceTypeJava
+	// spark.submit.pyFiles is always serialized by spark-submit; it defaults to
+	// empty but carries the user's --py-files (folded into sparkConf for Python
+	// apps by the operator adapter), so only default it when nothing set it.
+	if _, ok := props[confPyFiles]; !ok {
+		props[confPyFiles] = ""
+	}
+	props[confResourceType] = c.resourceType
 	props[confContainerImage] = c.image
 	props[confNamespace] = c.namespace
-	props[confMemoryOverheadFactor] = memoryOverheadFactorString
+	// BasicDriverFeatureStep emits its resolved default overhead factor (0.1 for
+	// JVM, 0.4 for non-JVM apps, or the user override); see newDriverConf.
+	props[confMemoryOverheadFactor] = formatOverheadFactor(c.memoryOverheadFactor)
 	props[confSubmitInDriver] = "true"
 	props[confDriverPodName] = c.driverPodName
-	if c.mainAppResource != "" {
+	// SparkSubmit auto-adds the primary resource to spark.jars only for JVM apps;
+	// for Python (and R) the primary .py/.R file "is already distributed as a
+	// regular file" and is NOT added to spark.jars (SparkSubmit.scala guards this
+	// with !args.isPython && !args.isR). User --jars still flow through the
+	// sparkConf passthrough above. Match that: only the Java branch adds it here.
+	if c.resourceType == resourceTypeJava && c.mainAppResource != "" {
 		props[confJars] = c.mainAppResource
 	}
 
@@ -139,4 +152,11 @@ func buildSystemProperties(c *driverConf) map[string]string {
 	}
 
 	return props
+}
+
+// formatOverheadFactor renders the overhead factor the way Spark serializes it
+// (Scala Double.toString): shortest round-trip decimal, so 0.1 -> "0.1" and
+// 0.4 -> "0.4", matching the golden spark.properties.
+func formatOverheadFactor(f float64) string {
+	return strconv.FormatFloat(f, 'g', -1, 64)
 }

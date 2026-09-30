@@ -58,9 +58,9 @@ func nativeTestApp() *v1beta2.SparkApplication {
 			Image:               ptr.To("spark:4.0.0"),
 			MainClass:           ptr.To("org.apache.spark.examples.SparkPi"),
 			MainApplicationFile: ptr.To("local:///opt/spark/examples/jars/spark-examples.jar"),
-			// The operator always sets a deterministic driver pod name so the
-			// controller can track the pod; mirror that here.
-			SparkConf: map[string]string{"spark.kubernetes.driver.pod.name": "sparkpi-driver"},
+			SparkVersion:        "4.0.0",
+			// No driver pod-name conf is set on purpose: the submitter derives the
+			// deterministic "<app>-driver" name itself (mirroring the operator).
 		},
 		Status: v1beta2.SparkApplicationStatus{SubmissionID: "sub-123"},
 	}
@@ -128,6 +128,108 @@ func TestNativeSparkSubmitter_Submit_CreatesResources(t *testing.T) {
 			assert.Equalf(t, testDriverPodUID, refs[0].UID, "%T owner UID must be backfilled", obj)
 		}
 	}
+}
+
+func TestNativeSparkSubmitter_Submit_InjectsOperatorTrackingIdentity(t *testing.T) {
+	c := uidAssigningClient(t)
+	app := nativeTestApp()
+
+	require.NoError(t, NewNativeSparkSubmitter(c).Submit(context.Background(), app))
+
+	// The submitter must not mutate the caller's app when folding in identity.
+	assert.NotContains(t, app.Spec.SparkConf, "spark.kubernetes.driver.pod.name",
+		"Submit must operate on a copy, not mutate the caller's SparkConf")
+	assert.Empty(t, app.Spec.Driver.Labels, "Submit must not mutate the caller's Driver.Labels")
+
+	ctx := context.Background()
+
+	// The driver pod is created under the deterministic name the reconciler tracks
+	// by (GetDriverPodName -> "<app>-driver") and carries the operator tracking
+	// labels, matching the classic path (and the mutating webhook's objectSelector).
+	pod := &corev1.Pod{}
+	require.NoError(t, c.Get(ctx,
+		types.NamespacedName{Namespace: "default", Name: "sparkpi-driver"}, pod))
+	assert.Equal(t, "sparkpi", pod.Labels["sparkoperator.k8s.io/app-name"])
+	assert.Equal(t, "true", pod.Labels["sparkoperator.k8s.io/launched-by-spark-operator"])
+	assert.Equal(t, "sub-123", pod.Labels["sparkoperator.k8s.io/submission-id"])
+	// No driver template on the test app => flagged for webhook mutation.
+	assert.Equal(t, "true", pod.Labels["sparkoperator.k8s.io/mutated-by-spark-operator"])
+
+	// The executor tracking labels must reach spark.properties so the driver stamps
+	// them on executor pods and getExecutorPods (by app-name + submission-id) can
+	// list them.
+	cmList := &corev1.ConfigMapList{}
+	require.NoError(t, c.List(ctx, cmList, client.InNamespace("default")))
+	require.NotEmpty(t, cmList.Items, "expected the driver ConfigMap")
+	props := cmList.Items[0].Data["spark.properties"]
+	assert.Contains(t, props, "spark.kubernetes.executor.label.sparkoperator.k8s.io/app-name=sparkpi")
+	assert.Contains(t, props, "spark.kubernetes.executor.label.sparkoperator.k8s.io/launched-by-spark-operator=true")
+	assert.Contains(t, props, "spark.kubernetes.executor.label.sparkoperator.k8s.io/submission-id=sub-123")
+	assert.Contains(t, props, "spark.kubernetes.executor.label.sparkoperator.k8s.io/mutated-by-spark-operator=true")
+}
+
+func TestNativeSparkSubmitter_Submit_FoldsExecutorConf(t *testing.T) {
+	c := uidAssigningClient(t)
+	app := nativeTestApp()
+	// Typed executor fields that Build (pkg/sparkdrivercreator) never reads — the
+	// native submitter must fold them into spark.properties so executors get them.
+	app.Spec.Executor = v1beta2.ExecutorSpec{
+		Instances: ptr.To(int32(3)),
+		SparkPodSpec: v1beta2.SparkPodSpec{
+			Memory:         ptr.To("2g"),
+			ServiceAccount: ptr.To("exec-sa"),
+			Labels:         map[string]string{"team": "data"},
+			Annotations:    map[string]string{"note": "hello"},
+		},
+	}
+
+	require.NoError(t, NewNativeSparkSubmitter(c).Submit(context.Background(), app))
+
+	cmList := &corev1.ConfigMapList{}
+	require.NoError(t, c.List(context.Background(), cmList, client.InNamespace("default")))
+	require.NotEmpty(t, cmList.Items)
+	props := cmList.Items[0].Data["spark.properties"]
+
+	assert.Contains(t, props, "spark.executor.instances=3")
+	assert.Contains(t, props, "spark.executor.memory=2g")
+	assert.Contains(t, props, "spark.kubernetes.authenticate.executor.serviceAccountName=exec-sa")
+	assert.Contains(t, props, "spark.kubernetes.executor.label.team=data")
+	assert.Contains(t, props, "spark.kubernetes.executor.annotation.note=hello")
+	// The executor image falls back to the top-level image when unset on the
+	// executor. The value's colon is Java-properties-escaped in spark.properties.
+	assert.Contains(t, props, `spark.kubernetes.executor.container.image=spark\:4.0.0`)
+}
+
+func TestNativeSparkSubmitter_Submit_PythonApp(t *testing.T) {
+	c := uidAssigningClient(t)
+	app := nativeTestApp()
+	app.Spec.Type = v1beta2.SparkApplicationTypePython
+	app.Spec.MainClass = nil
+	app.Spec.MainApplicationFile = ptr.To("local:///opt/spark/examples/src/main/python/pi.py")
+	app.Spec.PythonVersion = ptr.To("3")
+	app.Spec.Deps = v1beta2.Dependencies{PyFiles: []string{"local:///opt/lib/a.py", "local:///opt/lib/b.py"}}
+
+	require.NoError(t, NewNativeSparkSubmitter(c).Submit(context.Background(), app))
+
+	ctx := context.Background()
+
+	// The driver launches via PythonRunner against the .py primary resource.
+	pod := &corev1.Pod{}
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "sparkpi-driver"}, pod))
+	require.Len(t, pod.Spec.Containers, 1)
+	assert.Contains(t, pod.Spec.Containers[0].Args, "org.apache.spark.deploy.PythonRunner")
+	assert.Contains(t, pod.Spec.Containers[0].Args, "local:///opt/spark/examples/src/main/python/pi.py")
+
+	cmList := &corev1.ConfigMapList{}
+	require.NoError(t, c.List(ctx, cmList, client.InNamespace("default")))
+	require.NotEmpty(t, cmList.Items)
+	props := cmList.Items[0].Data["spark.properties"]
+
+	assert.Contains(t, props, "spark.kubernetes.resource.type=python")
+	assert.Contains(t, props, "spark.kubernetes.memoryOverheadFactor=0.4")
+	// Operator-injected typed Python fields folded by the adapter.
+	assert.Contains(t, props, "spark.kubernetes.pyspark.pythonVersion=3")
+	assert.Contains(t, props, `spark.submit.pyFiles=local\:///opt/lib/a.py,local\:///opt/lib/b.py`)
 }
 
 func TestNativeSparkSubmitter_Submit_DuplicateIsIdempotent(t *testing.T) {

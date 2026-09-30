@@ -1,0 +1,39 @@
+# Source-of-truth SparkApplication for the "sparkpi-python" oracle case.
+#
+# Models a *stock* spark-submit of a PySpark cluster-mode app (type: Python),
+# pinning SparkDriverCreator's Python branch against real Spark:
+#   - spark.kubernetes.resource.type=python,
+#   - the forced org.apache.spark.deploy.PythonRunner driver main class (Spark
+#     ignores any user main class for a k8s cluster Python submit),
+#   - BasicDriverFeatureStep's 0.4 non-JVM memory-overhead factor (vs 0.1 JVM),
+#   - the PYSPARK_PYTHON / PYSPARK_DRIVER_PYTHON driver env vars, and
+#   - that the primary .py resource is NOT auto-added to spark.jars (unlike a jar).
+#
+# spark.pyspark.python is set so the interpreter env vars are deterministic: Spark
+# resolves them from this conf before consulting the submit host's OS environment,
+# so the golden does not depend on whoever runs regen.sh. PYSPARK_DRIVER_PYTHON is
+# left unset and falls back to spark.pyspark.python.
+#
+# No deps.pyFiles here on purpose: --py-files is a spark-submit flag the operator
+# adapter folds into spark.submit.pyFiles (withOperatorSubmissionConf), NOT a field
+# Build reads from the CRD. Setting it would diverge from what stock spark-submit
+# serializes and break the byte-for-byte match.
+#
+# The primary resource is the PySpark pi example bundled in the Spark image, given
+# as a local:// URI: renameMainAppResource leaves local:// verbatim (no upload), so
+# the golden is deterministic. Its path has no version component, so — unlike the
+# Scala examples jar — it is not templated. regen.sh feeds the equivalent
+# submit-args.txt to stock spark-submit; keep the two in sync.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: sparkpi
+  namespace: default
+spec:
+  type: Python
+  mode: cluster
+  image: "__IMAGE__"
+  mainApplicationFile: "local:///opt/spark/examples/src/main/python/pi.py"
+  sparkConf:
+    spark.kubernetes.submission.waitAppCompletion: "false"
+    spark.pyspark.python: python3
