@@ -122,6 +122,21 @@ Create the role policy rules for the controller in every Spark job namespace
 - apiGroups:
   - ""
   resources:
+  # The native submitter creates the driver's on-demand PersistentVolumeClaim
+  # itself (owned by the driver pod), so the controller ServiceAccount needs PVC
+  # permissions. (The classic spark-submit path created it from the operator pod
+  # under this same ServiceAccount, so this is required there too.)
+  - persistentvolumeclaims
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - ""
+  resources:
   - configmaps
   verbs:
   - get
