@@ -612,13 +612,14 @@ func newSparkConnectReconcilerOptions() sparkconnect.Options {
 }
 
 func newSparkSubmitter(ctx context.Context, c client.Client) (sparkapplication.SparkApplicationSubmitter, error) {
-	if features.Enabled(features.NativeSubmitter) {
+	// The native pure-Go submitter is the default. The operator image no longer
+	// ships Spark, so the classic spark-submit submitter (which execs
+	// $SPARK_HOME/bin/spark-submit) cannot run in-process. RestSubmitter is the
+	// only opt-in alternative, and is mutually exclusive with NativeSubmitter
+	// (enforced during flag validation).
+	if !features.Enabled(features.RestSubmitter) {
 		logger.Info("Using native (pure-Go, in-operator) submitter")
 		return sparkapplication.NewNativeSparkSubmitter(c), nil
-	}
-
-	if !features.Enabled(features.RestSubmitter) {
-		return &sparkapplication.SparkSubmitter{}, nil
 	}
 
 	var tlsCfg *sparkapplication.TLSConfig
