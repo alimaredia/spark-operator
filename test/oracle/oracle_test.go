@@ -127,9 +127,12 @@ func TestGoldenWellFormed(t *testing.T) {
 
 // TestDriverSpecMatchesOracle is the differential test proper: build the driver
 // resources in pure Go and require them to match stock spark-submit's captured
-// output. Each captured object is its own subtest; an object Build does not yet
-// produce (a nil field) skips rather than fails, so the objects can land one at a
-// time behind their committed goldens.
+// output. The object kinds checked per case are driven by which golden files the
+// case actually has: every committed golden must be reproduced (a missing object
+// fails) and Build must not emit an object stock spark-submit did not (an extra
+// object fails). A case therefore only exercises the objects that exist for it —
+// e.g. only sparkpi-podtemplate has an executor pod-template ConfigMap and only
+// sparkpi-pvc has an on-demand PVC — so there are no not-applicable slots to skip.
 func TestDriverSpecMatchesOracle(t *testing.T) {
 	for _, ver := range sparkVersions {
 		for _, name := range discoverCases(t, ver) {
@@ -163,12 +166,26 @@ func TestDriverSpecMatchesOracle(t *testing.T) {
 					{"PersistentVolumeClaim", "persistentvolumeclaim.json", firstPVC(res.PersistentVolumeClaims)},
 				}
 				for _, o := range objects {
-					t.Run(o.kind, func(t *testing.T) {
-						if isNilObject(o.obj) {
-							t.Skipf("SparkDriverCreator.Build does not produce the %s yet; golden for %s/%s is committed and ready", o.kind, ver, name)
+					_, statErr := os.Stat(filepath.Join(dir, o.file))
+					switch {
+					case statErr == nil:
+						// Stock spark-submit produced this object: Build must reproduce it.
+						t.Run(o.kind, func(t *testing.T) {
+							require.Falsef(t, isNilObject(o.obj),
+								"golden %s is committed but Build produced no %s", o.file, o.kind)
+							compare(t, dir, o.file, o.obj, o.kind, "v1", vars)
+						})
+					case os.IsNotExist(statErr):
+						// Stock spark-submit produced no such object for this case, so there
+						// is nothing to pin. Guard against the native creator emitting one anyway.
+						if !isNilObject(o.obj) {
+							t.Run(o.kind, func(t *testing.T) {
+								t.Fatalf("Build produced a %s but stock spark-submit produced none for %s (no golden %s)", o.kind, name, o.file)
+							})
 						}
-						compare(t, dir, o.file, o.obj, o.kind, "v1", vars)
-					})
+					default:
+						require.NoErrorf(t, statErr, "stat golden %s/%s", name, o.file)
+					}
 				}
 			})
 		}
