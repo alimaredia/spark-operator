@@ -44,10 +44,13 @@ import (
 	"github.com/kubeflow/spark-operator/v2/test/oracle/internal/oraclenorm"
 )
 
-// sparkVersions is the oracle matrix. Add a version here once
-// test/oracle/setup-spark.sh <ver> && test/oracle/regen.sh has produced its
-// golden files under golden/<ver>/.
-var sparkVersions = []string{"4.0.4"}
+// sparkVersions is the oracle matrix. It is exactly the native creator's
+// SupportedSparkVersions (single source of truth): the two must stay in lockstep,
+// since a version the submitter admits must be one we have goldens for, and vice
+// versa. Add a version by appending to SupportedSparkVersions and running
+// test/oracle/setup-spark.sh <ver> && test/oracle/regen.sh to produce its goldens
+// under golden/<ver>/.
+var sparkVersions = sparkdrivercreator.SupportedSparkVersions
 
 // goldenObject describes one per-case golden file and the Kind it holds. It is a
 // slice, not a Kind-keyed map, because a pod-template submission emits two

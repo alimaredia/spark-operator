@@ -1086,6 +1086,16 @@ func (r *Reconciler) updateDriverState(ctx context.Context, app *v1beta2.SparkAp
 				if state.ExitCode != 0 {
 					app.Status.AppState.ErrorMessage = fmt.Sprintf("driver container failed with ExitCode: %d, Reason: %s", state.ExitCode, state.Reason)
 				}
+			} else if name, initState := util.GetFailedInitContainerTerminatedState(driverPod); initState != nil {
+				// The driver container never started because an init container failed
+				// (e.g. the native submitter's spark-version-gate). Surface that init
+				// container's reason instead of a generic "driver container status
+				// missing" so the user sees why (e.g. a Spark version mismatch).
+				msg := strings.TrimSpace(initState.Message)
+				if msg == "" {
+					msg = initState.Reason
+				}
+				app.Status.AppState.ErrorMessage = fmt.Sprintf("driver init container %q failed with ExitCode: %d: %s", name, initState.ExitCode, msg)
 			} else {
 				app.Status.AppState.ErrorMessage = "driver container status missing"
 			}

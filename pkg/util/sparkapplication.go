@@ -372,6 +372,21 @@ func GetExecutorContainerTerminatedState(pod *corev1.Pod) *corev1.ContainerState
 	return state
 }
 
+// GetFailedInitContainerTerminatedState returns the name and terminated state of
+// the first init container that terminated with a non-zero exit code, or ("", nil)
+// if none did. When an init container fails, the pod's main containers never start,
+// so the driver container has no terminated state to report; this is how a
+// pre-start failure (e.g. the native submitter's spark-version-gate) surfaces its
+// exit code and reason.
+func GetFailedInitContainerTerminatedState(pod *corev1.Pod) (string, *corev1.ContainerStateTerminated) {
+	for _, c := range pod.Status.InitContainerStatuses {
+		if t := c.State.Terminated; t != nil && t.ExitCode != 0 {
+			return c.Name, t
+		}
+	}
+	return "", nil
+}
+
 // GetContainerTerminatedState returns the terminated state of the container.
 func GetContainerTerminatedState(pod *corev1.Pod, container string) *corev1.ContainerStateTerminated {
 	for _, c := range pod.Status.ContainerStatuses {

@@ -102,6 +102,15 @@ func (s *NativeSparkSubmitter) Submit(ctx context.Context, app *v1beta2.SparkApp
 	pod.Namespace = app.Namespace
 	pod.OwnerReferences = append(pod.OwnerReferences, util.GetOwnerReference(app))
 
+	// Guard against a wrong/lying declared spec.sparkVersion: prepend an init
+	// container that checks the image's real Spark version before the driver runs.
+	// Build already used the declared version to construct this pod, so this is the
+	// backstop that refuses to run it on a mismatching image (fails the pod, which
+	// is owned by the app, so all created resources are garbage-collected).
+	if err := withVersionGate(pod, app); err != nil {
+		return fmt.Errorf("failed to add spark version gate for %s/%s: %w", app.Namespace, app.Name, err)
+	}
+
 	nativeLogger.Info("Submitting spark application natively",
 		"name", app.Name,
 		"namespace", app.Namespace,

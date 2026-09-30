@@ -570,3 +570,51 @@ var _ = Describe("ApplyDefaultDriverServiceAccount", func() {
 		})
 	})
 })
+
+var _ = Describe("GetFailedInitContainerTerminatedState", func() {
+	newPod := func(statuses ...corev1.ContainerStatus) *corev1.Pod {
+		return &corev1.Pod{Status: corev1.PodStatus{InitContainerStatuses: statuses}}
+	}
+
+	It("returns the first init container that exited non-zero, with its reason", func() {
+		pod := newPod(corev1.ContainerStatus{
+			Name: "spark-version-gate",
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				ExitCode: 1,
+				Reason:   "Error",
+				Message:  "spark-version-gate: image Spark version (4.0.4) does not match spec.sparkVersion (3.5.0)",
+			}},
+		})
+		name, state := util.GetFailedInitContainerTerminatedState(pod)
+		Expect(name).To(Equal("spark-version-gate"))
+		Expect(state).NotTo(BeNil())
+		Expect(state.ExitCode).To(Equal(int32(1)))
+		Expect(state.Message).To(ContainSubstring("does not match spec.sparkVersion"))
+	})
+
+	It("returns nil when all init containers succeeded", func() {
+		pod := newPod(corev1.ContainerStatus{
+			Name:  "spark-version-gate",
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}},
+		})
+		name, state := util.GetFailedInitContainerTerminatedState(pod)
+		Expect(name).To(BeEmpty())
+		Expect(state).To(BeNil())
+	})
+
+	It("returns nil when an init container is still running (not terminated)", func() {
+		pod := newPod(corev1.ContainerStatus{
+			Name:  "spark-version-gate",
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+		})
+		name, state := util.GetFailedInitContainerTerminatedState(pod)
+		Expect(name).To(BeEmpty())
+		Expect(state).To(BeNil())
+	})
+
+	It("returns nil when there are no init containers", func() {
+		name, state := util.GetFailedInitContainerTerminatedState(newPod())
+		Expect(name).To(BeEmpty())
+		Expect(state).To(BeNil())
+	})
+})
