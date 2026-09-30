@@ -47,7 +47,7 @@ func TestResolveResourceType(t *testing.T) {
 		{v1beta2.SparkApplicationTypeJava, resourceTypeJava, false},
 		{"", resourceTypeJava, false}, // unset defaults to java
 		{v1beta2.SparkApplicationTypePython, resourceTypePython, false},
-		{v1beta2.SparkApplicationTypeR, "", true}, // not supported yet
+		{v1beta2.SparkApplicationTypeR, "", true}, // SparkR deprecated upstream; permanently unsupported
 		{"Elixir", "", true},                      // unknown
 	}
 	for _, tc := range cases {

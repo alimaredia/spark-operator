@@ -404,8 +404,10 @@ func resolveImage(app *v1beta2.SparkApplication) (string, error) {
 
 // resolveResourceType maps the SparkApplication type to Spark's
 // spark.kubernetes.resource.type. Scala/Java (and the unset default) are "java";
-// Python is "python". R is not yet reproduced by the native submitter, so it is
-// rejected rather than silently mislaunched as a JVM app.
+// Python is "python". R (SparkR) is deliberately and permanently unsupported: it
+// is deprecated in Apache Spark 4.0.0 and slated for removal upstream (see
+// spark/docs/sparkr.md), so the native submitter will not reproduce it. R apps are
+// rejected here rather than silently mislaunched as a JVM app.
 func resolveResourceType(appType v1beta2.SparkApplicationType) (string, error) {
 	switch appType {
 	case v1beta2.SparkApplicationTypeJava, v1beta2.SparkApplicationTypeScala, "":
@@ -413,7 +415,7 @@ func resolveResourceType(appType v1beta2.SparkApplicationType) (string, error) {
 	case v1beta2.SparkApplicationTypePython:
 		return resourceTypePython, nil
 	case v1beta2.SparkApplicationTypeR:
-		return "", fmt.Errorf("sparkdrivercreator: R applications are not supported by the native submitter")
+		return "", fmt.Errorf("sparkdrivercreator: R (SparkR) applications are not supported by the native submitter (SparkR is deprecated in Spark 4.0.0 and slated for removal upstream)")
 	default:
 		return "", fmt.Errorf("sparkdrivercreator: unsupported application type %q", appType)
 	}

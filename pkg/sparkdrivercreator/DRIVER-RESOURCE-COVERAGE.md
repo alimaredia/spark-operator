@@ -56,3 +56,11 @@ unreachable. None is a coverage gap: there is no supported input that produces i
 For the referenced (reachable) counterpart of #9 —
 `spark.kubernetes.hadoop.configMapName` via `spec.sparkConf` passthrough — see the
 `sparkpi-hadoopconf` oracle case; that pre-existing-ConfigMap mode **is** ported.
+
+## Application types
+
+| `spec.type` | Native creator | Notes |
+|-------------|----------------|-------|
+| Scala / Java (and unset default) | ✅ ported | JVM driver; `sparkpi-*` oracle cases |
+| Python (PySpark) | ✅ ported | `org.apache.spark.deploy.PythonRunner`, `resource.type=python`, 0.4 overhead, PYSPARK env; `sparkpi-python` oracle case |
+| R (SparkR) | 🚫 permanently unsupported | SparkR is **deprecated in Apache Spark 4.0.0 and slated for removal** upstream (`spark/docs/sparkr.md`). Rather than reproduce a sunsetting feature, the native creator rejects `spec.type: R` at `resolveResourceType` (`driverconf.go`) with a clear error, so it fails fast instead of silently launching as a JVM app. Not a coverage gap — a deliberate decision. |
