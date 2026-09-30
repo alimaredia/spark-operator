@@ -299,6 +299,11 @@ func ownedResources(res *sparkdrivercreator.DriverResources) []client.Object {
 	for _, pvc := range res.PersistentVolumeClaims {
 		objs = append(objs, pvc)
 	}
+	// NetworkPolicy is produced only for Spark versions that create it (4.2.0+);
+	// nil otherwise, so 4.0.4 submissions apply nothing extra.
+	if res.NetworkPolicy != nil {
+		objs = append(objs, res.NetworkPolicy)
+	}
 	return objs
 }
 

@@ -71,6 +71,10 @@ var goldenObjectFiles = []goldenObject{
 	{kind: "Service", file: "service.json"},
 	{kind: "ConfigMap", file: "podspec-configmap.json", optional: true},
 	{kind: "PersistentVolumeClaim", file: "persistentvolumeclaim.json", optional: true},
+	// NetworkPolicy is emitted on every case for Spark versions that create it
+	// (4.2.0+) and on none for versions that don't (4.0.4), so it is optional
+	// across the matrix.
+	{kind: "NetworkPolicy", file: "networkpolicy.json", optional: true},
 }
 
 func imageFor(v string) string { return "spark:" + v }
@@ -158,15 +162,17 @@ func TestDriverSpecMatchesOracle(t *testing.T) {
 				dir := filepath.Join("golden", ver, name)
 
 				objects := []struct {
-					kind string
-					file string
-					obj  any
+					kind       string
+					apiVersion string
+					file       string
+					obj        any
 				}{
-					{"Pod", "driver-pod.json", res.Pod},
-					{"ConfigMap", "configmap.json", res.ConfigMap},
-					{"Service", "service.json", res.Service},
-					{"ConfigMap", "podspec-configmap.json", res.PodSpecConfigMap},
-					{"PersistentVolumeClaim", "persistentvolumeclaim.json", firstPVC(res.PersistentVolumeClaims)},
+					{"Pod", "v1", "driver-pod.json", res.Pod},
+					{"ConfigMap", "v1", "configmap.json", res.ConfigMap},
+					{"Service", "v1", "service.json", res.Service},
+					{"ConfigMap", "v1", "podspec-configmap.json", res.PodSpecConfigMap},
+					{"PersistentVolumeClaim", "v1", "persistentvolumeclaim.json", firstPVC(res.PersistentVolumeClaims)},
+					{"NetworkPolicy", "networking.k8s.io/v1", "networkpolicy.json", res.NetworkPolicy},
 				}
 				for _, o := range objects {
 					_, statErr := os.Stat(filepath.Join(dir, o.file))
@@ -176,7 +182,7 @@ func TestDriverSpecMatchesOracle(t *testing.T) {
 						t.Run(o.kind, func(t *testing.T) {
 							require.Falsef(t, isNilObject(o.obj),
 								"golden %s is committed but Build produced no %s", o.file, o.kind)
-							compare(t, dir, o.file, o.obj, o.kind, "v1", vars)
+							compare(t, dir, o.file, o.obj, o.kind, o.apiVersion, vars)
 						})
 					case os.IsNotExist(statErr):
 						// Stock spark-submit produced no such object for this case, so there

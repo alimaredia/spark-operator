@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,6 +41,7 @@ func nativeTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, networkingv1.AddToScheme(scheme))
 	require.NoError(t, v1beta2.AddToScheme(scheme))
 	return scheme
 }
@@ -128,6 +130,41 @@ func TestNativeSparkSubmitter_Submit_CreatesResources(t *testing.T) {
 			assert.Equalf(t, testDriverPodUID, refs[0].UID, "%T owner UID must be backfilled", obj)
 		}
 	}
+}
+
+func TestNativeSparkSubmitter_Submit_NetworkPolicyVersionGated(t *testing.T) {
+	ctx := context.Background()
+
+	// A Spark version that does not create a NetworkPolicy: none is applied.
+	t.Run("absent before the gate version", func(t *testing.T) {
+		c := uidAssigningClient(t)
+		require.NoError(t, NewNativeSparkSubmitter(c).Submit(ctx, nativeTestApp()))
+
+		npList := &networkingv1.NetworkPolicyList{}
+		require.NoError(t, c.List(ctx, npList, client.InNamespace("default")))
+		assert.Empty(t, npList.Items, "no NetworkPolicy should be created before the gate version")
+	})
+
+	// Spark 4.2.0: the NetworkPolicy is applied, namespaced, and owned by the driver
+	// pod with the server-assigned UID backfilled in.
+	t.Run("created and owned at 4.2.0", func(t *testing.T) {
+		c := uidAssigningClient(t)
+		app := nativeTestApp()
+		app.Spec.SparkVersion = "4.2.0"
+		app.Spec.Image = ptr.To("spark:4.2.0")
+		require.NoError(t, NewNativeSparkSubmitter(c).Submit(ctx, app))
+
+		npList := &networkingv1.NetworkPolicyList{}
+		require.NoError(t, c.List(ctx, npList, client.InNamespace("default")))
+		require.Len(t, npList.Items, 1, "expected the driver NetworkPolicy at 4.2.0")
+
+		np := npList.Items[0]
+		assert.Equal(t, "default", np.Namespace)
+		require.Len(t, np.OwnerReferences, 1)
+		assert.Equal(t, "Pod", np.OwnerReferences[0].Kind)
+		assert.Equal(t, "sparkpi-driver", np.OwnerReferences[0].Name)
+		assert.Equal(t, testDriverPodUID, np.OwnerReferences[0].UID, "owner UID must be backfilled")
+	})
 }
 
 func TestNativeSparkSubmitter_Submit_InjectsOperatorTrackingIdentity(t *testing.T) {

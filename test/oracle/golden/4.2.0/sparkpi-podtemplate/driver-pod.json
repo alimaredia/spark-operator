@@ -1,0 +1,134 @@
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "labels": {
+      "spark-app-name": "sparkpi",
+      "spark-app-selector": "__APP_ID__",
+      "spark-role": "driver",
+      "spark-version": "4.2.0"
+    },
+    "name": "__PREFIX__-driver"
+  },
+  "spec": {
+    "containers": [
+      {
+        "args": [
+          "driver",
+          "--properties-file",
+          "/opt/spark/conf/spark.properties",
+          "--class",
+          "org.apache.spark.examples.SparkPi",
+          "local:///opt/spark/examples/jars/spark-examples_2.13-4.2.0.jar"
+        ],
+        "env": [
+          {
+            "name": "SPARK_USER",
+            "value": "__SPARK_USER__"
+          },
+          {
+            "name": "SPARK_APPLICATION_ID",
+            "value": "__APP_ID__"
+          },
+          {
+            "name": "SPARK_DRIVER_BIND_ADDRESS",
+            "valueFrom": {
+              "fieldRef": {
+                "apiVersion": "v1",
+                "fieldPath": "status.podIP"
+              }
+            }
+          },
+          {
+            "name": "SPARK_LOCAL_DIRS",
+            "value": "/var/data/__LOCAL_DIR__"
+          },
+          {
+            "name": "SPARK_CONF_DIR",
+            "value": "/opt/spark/conf"
+          }
+        ],
+        "image": "spark:4.2.0",
+        "imagePullPolicy": "IfNotPresent",
+        "name": "spark-kubernetes-driver",
+        "ports": [
+          {
+            "containerPort": 7078,
+            "name": "driver-rpc-port",
+            "protocol": "TCP"
+          },
+          {
+            "containerPort": 7079,
+            "name": "blockmanager",
+            "protocol": "TCP"
+          },
+          {
+            "containerPort": 4040,
+            "name": "spark-ui",
+            "protocol": "TCP"
+          },
+          {
+            "containerPort": 15002,
+            "name": "spark-connect",
+            "protocol": "TCP"
+          }
+        ],
+        "resources": {
+          "limits": {
+            "memory": "1408Mi"
+          },
+          "requests": {
+            "cpu": "1",
+            "memory": "1408Mi"
+          }
+        },
+        "volumeMounts": [
+          {
+            "mountPath": "/opt/spark/pod-template",
+            "name": "pod-template-volume"
+          },
+          {
+            "mountPath": "/opt/spark/conf",
+            "name": "spark-conf-volume-driver"
+          },
+          {
+            "mountPath": "/var/data/__LOCAL_DIR__",
+            "name": "spark-local-dir-1"
+          }
+        ]
+      }
+    ],
+    "restartPolicy": "Never",
+    "volumes": [
+      {
+        "configMap": {
+          "items": [
+            {
+              "key": "podspec-configmap-key",
+              "path": "pod-spec-template.yml"
+            }
+          ],
+          "name": "__PREFIX__-driver-podspec-conf-map"
+        },
+        "name": "pod-template-volume"
+      },
+      {
+        "configMap": {
+          "items": [
+            {
+              "key": "spark.properties",
+              "mode": 420,
+              "path": "spark.properties"
+            }
+          ],
+          "name": "spark-drv-__CM_ID__-conf-map"
+        },
+        "name": "spark-conf-volume-driver"
+      },
+      {
+        "emptyDir": {},
+        "name": "spark-local-dir-1"
+      }
+    ]
+  }
+}

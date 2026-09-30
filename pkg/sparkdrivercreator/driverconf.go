@@ -55,16 +55,25 @@ const (
 	defaultMaster = "k8s://https://kubernetes.default.svc:443"
 )
 
-// Port defaults. NOTE: connect-server port defaults to 0 on Spark 4.0.x (the
-// port is only emitted when connect is enabled), unlike master where it is
-// 15002. The golden for 4.0.4 has no spark-connect port, so we default it to 0
-// and let the port != 0 filter drop it. Revisit per-version when the matrix grows.
+// Port defaults. NOTE: the connect-server port is version-gated. On Spark 4.0.x
+// it defaults to 0 (the port is only emitted when connect is explicitly enabled),
+// so the port != 0 filter in ports() drops it and the 4.0.4 golden has no
+// spark-connect port. Spark 4.2.0's DriverServiceFeatureStep publishes it by
+// default at 15002, so connectPortDefault() returns that when the declared
+// version exposes it (see versionExposesConnectPort).
 const (
-	defaultDriverPort       = 7078
-	defaultBlockManagerPort = 7079
-	defaultUIPort           = 4040
-	defaultConnectPort      = 0
+	defaultDriverPort         = 7078
+	defaultBlockManagerPort   = 7079
+	defaultUIPort             = 4040
+	defaultConnectPort        = 0
+	defaultConnectPortEnabled = 15002
 )
+
+// connectAppProtocol is the appProtocol Spark's DriverServiceFeatureStep stamps
+// on the spark-connect *service* port. The matching container port carries no
+// appProtocol (only protocol: TCP), so it lives on portSpec but is applied by the
+// service builder alone.
+const connectAppProtocol = "grpc"
 
 // SparkConf keys BasicDriverFeatureStep consults for the container ports.
 const (
@@ -682,22 +691,25 @@ func (c *driverConf) blockManagerPort() int {
 	return c.intConf(confBlockManagerPort, defaultBlockManagerPort)
 }
 
-// portSpec is a resolved (name, port) pair shared by the container ports and the
-// driver service ports — the oracle proves the two sets are identical.
+// portSpec is a resolved (name, port) triple shared by the container ports and
+// the driver service ports — the oracle proves the two sets are identical. The
+// appProtocol is service-only (the spark-connect grpc port); the container port
+// ignores it.
 type portSpec struct {
-	name string
-	port int32
+	name        string
+	port        int32
+	appProtocol string
 }
 
 // ports resolves the driver's ports in Spark's order, dropping any that resolve
-// to 0 (an invalid port) — which is how the spark-connect port stays off by
-// default on Spark 4.0.x.
+// to 0 (an invalid port) — which is how the spark-connect port stays off on Spark
+// 4.0.x and is published (at 15002) only on versions that expose it.
 func (c *driverConf) ports() []portSpec {
 	candidates := []portSpec{
-		{portNameDriverRPC, int32(c.intConf(confDriverPort, defaultDriverPort))},
-		{portNameBlockManager, int32(c.blockManagerPort())},
-		{portNameUI, int32(c.intConf(confUIPort, defaultUIPort))},
-		{portNameConnectServer, int32(c.intConf(confConnectPort, defaultConnectPort))},
+		{name: portNameDriverRPC, port: int32(c.intConf(confDriverPort, defaultDriverPort))},
+		{name: portNameBlockManager, port: int32(c.blockManagerPort())},
+		{name: portNameUI, port: int32(c.intConf(confUIPort, defaultUIPort))},
+		{name: portNameConnectServer, port: int32(c.intConf(confConnectPort, c.connectPortDefault())), appProtocol: connectAppProtocol},
 	}
 	out := make([]portSpec, 0, len(candidates))
 	for _, p := range candidates {
@@ -707,6 +719,17 @@ func (c *driverConf) ports() []portSpec {
 		out = append(out, p)
 	}
 	return out
+}
+
+// connectPortDefault returns the spark-connect port default for this submission's
+// declared Spark version: 15002 on versions that publish it by default (so it
+// lands on both the driver service and container), 0 otherwise (so the port != 0
+// filter in ports() drops it, leaving 4.0.4 output unchanged).
+func (c *driverConf) connectPortDefault() int {
+	if versionExposesConnectPort(c.sparkVersion) {
+		return defaultConnectPortEnabled
+	}
+	return defaultConnectPort
 }
 
 func copyStringMap(m map[string]string) map[string]string {

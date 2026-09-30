@@ -1,0 +1,41 @@
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+    "labels": {
+      "spark-app-selector": "__APP_ID__"
+    },
+    "name": "__PREFIX__-policy",
+    "namespace": "default",
+    "ownerReferences": [
+      {
+        "apiVersion": "v1",
+        "controller": true,
+        "kind": "Pod",
+        "name": "__PREFIX__-driver",
+        "uid": "__OWNER_UID__"
+      }
+    ]
+  },
+  "spec": {
+    "ingress": [
+      {
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "spark-app-selector": "__APP_ID__"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "podSelector": {
+      "matchLabels": {
+        "spark-app-selector": "__APP_ID__",
+        "spark-role": "executor"
+      }
+    }
+  }
+}

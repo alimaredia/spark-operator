@@ -36,6 +36,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
@@ -81,6 +82,12 @@ type DriverResources struct {
 	// driver volume requests an on-demand PVC. Like the Service/ConfigMap, each is
 	// applied after the driver pod exists and carries the driver pod as owner.
 	PersistentVolumeClaims []*corev1.PersistentVolumeClaim
+	// NetworkPolicy is the driver-owned NetworkPolicy Spark's
+	// NetworkPolicyFeatureStep (SPARK-55653) creates. It is nil for Spark versions
+	// that do not emit it (4.0.4); it is populated only for versions that do (4.2.0),
+	// gated on the declared spec.sparkVersion. Like the Service/ConfigMap it is
+	// applied after the driver pod exists and carries the driver pod as owner.
+	NetworkPolicy *networkingv1.NetworkPolicy
 }
 
 // BuildOptions carries submit-time inputs the operator supplies out-of-band —
@@ -127,6 +134,8 @@ func (c *SparkDriverCreator) Build(app *v1beta2.SparkApplication, opts BuildOpti
 		res.PodSpecConfigMap = buildPodSpecConfigMap(conf)
 	}
 	res.PersistentVolumeClaims = buildDriverPVCs(conf)
+	// nil for versions that don't emit it (4.0.4); populated for 4.2.0+.
+	res.NetworkPolicy = buildDriverNetworkPolicy(conf)
 	return res, nil
 }
 

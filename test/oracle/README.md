@@ -180,20 +180,32 @@ RAW_ONLY=1 test/oracle/regen.sh         # capture raw bodies only (debugging)
 ```
 
 `SPARK_VERSION` defaults to `4.0.4` if unset. This does **not** change which
-versions the test runs — that comes from `sparkVersions` in `oracle_test.go`.
+versions the test runs — that comes from `SupportedSparkVersions` in
+`pkg/sparkdrivercreator/versions.go`, which `oracle_test.go`'s `sparkVersions`
+derives from (single source of truth, shared with the in-pod version gate).
 
 ## Adding a Spark version
 
 Same as regenerating above, plus one edit to register the version so the test
-actually runs it (versions are listed explicitly in `oracle_test.go`; a golden
-dir alone is ignored):
+actually runs it (versions come from `SupportedSparkVersions`; a golden dir alone
+is ignored):
 
 1. Do everything in "Regenerating golden files" for the new version, e.g.
-   `test/oracle/setup-spark.sh 4.0.5 && SPARK_VERSION=4.0.5 test/oracle/regen.sh`.
-2. Add `"4.0.5"` to `sparkVersions` in `oracle_test.go`.
+   `test/oracle/setup-spark.sh 4.2.0 && SPARK_VERSION=4.2.0 test/oracle/regen.sh`.
+2. Add `"4.2.0"` to `SupportedSparkVersions` in `pkg/sparkdrivercreator/versions.go`.
 
 The oracle is self-updating: the golden regenerates from Spark itself, so a new
 version is a few commands plus one line, not a hand-written expectation.
+
+**Version-gated resources.** A new version may create Kubernetes resources (or
+ports) that earlier versions did not — e.g. Spark 4.2.0 adds a driver
+`NetworkPolicy` (SPARK-55653) and a default `spark-connect` service port. Those
+are reproduced only for the versions that emit them, gated on the declared
+`spec.sparkVersion` (see `versionCreatesDriverNetworkPolicy` /
+`versionExposesConnectPort`), so earlier versions' goldens stay byte-for-byte
+unchanged. When a regenerated golden shows a brand-new object Kind, add it to
+`goldenObjectFiles` and the objects table in `oracle_test.go` and build it behind
+a version gate — do not emit it unconditionally.
 
 ## Normalization
 

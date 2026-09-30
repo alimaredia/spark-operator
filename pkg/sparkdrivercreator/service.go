@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -65,15 +66,21 @@ func buildDriverService(conf *driverConf) *corev1.Service {
 
 // driverServicePorts maps the shared resolved port set to service ports. Spark
 // leaves protocol unset (defaulting to TCP) and points targetPort at the same
-// numeric port as the published port.
+// numeric port as the published port. The spark-connect port additionally carries
+// appProtocol: grpc, which Spark's DriverServiceFeatureStep sets on the service
+// (but not the container) port.
 func driverServicePorts(conf *driverConf) []corev1.ServicePort {
 	var ports []corev1.ServicePort
 	for _, p := range conf.ports() {
-		ports = append(ports, corev1.ServicePort{
+		sp := corev1.ServicePort{
 			Name:       p.name,
 			Port:       p.port,
 			TargetPort: intstr.FromInt32(p.port),
-		})
+		}
+		if p.appProtocol != "" {
+			sp.AppProtocol = ptr.To(p.appProtocol)
+		}
+		ports = append(ports, sp)
 	}
 	return ports
 }
