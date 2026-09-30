@@ -411,7 +411,8 @@ func collectSparkApplicationsUntilTermination(ctx context.Context, key types.Nam
 
 // loadSparkApplication parses the SparkApplication example at path and gives
 // the caller a fresh copy. We rename it per-test so two tests can run in the
-// same namespace without colliding.
+// same namespace without colliding. When SPARK_VERSION is set, the returned app
+// is retargeted at that Spark version (see applySparkVersionOverride).
 func loadSparkApplication(path, name string) *v1beta2.SparkApplication {
 	app := &v1beta2.SparkApplication{}
 	file, err := os.Open(path)
@@ -423,7 +424,56 @@ func loadSparkApplication(path, name string) *v1beta2.SparkApplication {
 	app.Name = name
 	app.ResourceVersion = ""
 	app.UID = ""
+	applySparkVersionOverride(app)
 	return app
+}
+
+// SparkVersionEnvVar names the environment variable that overrides the Spark
+// version every e2e SparkApplication runs with. It mirrors test/oracle/regen.sh's
+// SPARK_VERSION so the same knob names the version across the oracle and e2e.
+const SparkVersionEnvVar = "SPARK_VERSION"
+
+// sparkVersionOverride returns the Spark version the suite was asked to run
+// against via SPARK_VERSION, or "" to use each example's baked-in version.
+func sparkVersionOverride() string {
+	return strings.TrimSpace(os.Getenv(SparkVersionEnvVar))
+}
+
+// applySparkVersionOverride retargets app at the SPARK_VERSION Spark version, if
+// set: it rewrites both spec.sparkVersion (which the native submitter's in-pod
+// gate checks against the image's real version) and the image tag, so a single
+// env var re-runs the whole suite on another Spark image, e.g.
+//
+//	SPARK_VERSION=4.2.0 make e2e
+//
+// The example mainApplicationFiles are version-agnostic (spark-examples.jar / a
+// bundled pi.py), so only the version and image tag need to change. It is a no-op
+// when SPARK_VERSION is unset, leaving the example exactly as written.
+func applySparkVersionOverride(app *v1beta2.SparkApplication) {
+	version := sparkVersionOverride()
+	if version == "" {
+		return
+	}
+	app.Spec.SparkVersion = version
+	if app.Spec.Image != nil && *app.Spec.Image != "" {
+		app.Spec.Image = ptr.To(retagImage(*app.Spec.Image, version))
+	}
+}
+
+// retagImage replaces the tag of a container image reference with version,
+// preserving the registry/repository (including a registry host:port). The tag
+// is the text after the last ':' that follows the last '/'; a digest ('@sha256:')
+// or a bare repository (no tag) is handled by appending/replacing accordingly.
+func retagImage(image, version string) string {
+	if at := strings.LastIndex(image, "@"); at >= 0 {
+		// name@digest: replace the whole digest ref with an explicit tag.
+		image = image[:at]
+	}
+	repo := image
+	if colon := strings.LastIndex(image, ":"); colon > strings.LastIndex(image, "/") {
+		repo = image[:colon]
+	}
+	return repo + ":" + version
 }
 
 // loadSparkPi loads the canonical Scala spark-pi example.

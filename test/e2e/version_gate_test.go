@@ -37,6 +37,16 @@ import (
 // the operator's internal packages.
 const versionGateContainerName = "spark-version-gate"
 
+// mismatchVersion returns a well-formed Spark version guaranteed to differ from
+// the app's current (image-matching) spec.sparkVersion, so the in-pod gate always
+// sees a mismatch regardless of the suite's configured SPARK_VERSION.
+func mismatchVersion(app *v1beta2.SparkApplication) string {
+	if app.Spec.SparkVersion == "3.5.0" {
+		return "3.4.0"
+	}
+	return "3.5.0"
+}
+
 var _ = Describe("Native submitter Spark-version gate", func() {
 	ctx := context.Background()
 
@@ -44,12 +54,13 @@ var _ = Describe("Native submitter Spark-version gate", func() {
 		var app *v1beta2.SparkApplication
 
 		BeforeEach(func() {
-			// examples/spark-pi.yaml runs docker.io/apache/spark:4.0.4. Declare a
-			// different, well-formed version so the image still passes admission but
-			// the in-pod gate detects the mismatch (image 4.0.4 != declared 3.5.0)
-			// and fails the driver pod before the Spark driver process ever starts.
+			// The image runs the suite's configured Spark version (SPARK_VERSION, or
+			// the example default). Declare a DIFFERENT, well-formed version so the
+			// image still passes admission but the in-pod gate detects the mismatch
+			// (image version != declared version) and fails the driver pod before the
+			// Spark driver process ever starts.
 			app = loadSparkPi("e2e-version-gate-mismatch")
-			app.Spec.SparkVersion = "3.5.0"
+			app.Spec.SparkVersion = mismatchVersion(app)
 
 			By("Creating a SparkApplication whose declared Spark version mismatches its image")
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())

@@ -127,6 +127,7 @@ func loadSparkPiExample(namespace, name string) (*v1beta2.SparkApplication, erro
 
 	app.Namespace = namespace
 	app.Name = name
+	applySparkVersionOverride(app)
 	return app, nil
 }
 

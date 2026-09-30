@@ -235,7 +235,7 @@ unit-test: setup-envtest ## Run unit tests.
 e2e-test: IMAGE_TAG=local
 e2e-test: envtest kind-load-image kind-load-spark-image ## Run the e2e tests against a Kind k8s instance that is spun up.
 	@echo "Running e2e tests (deploy_method=$(DEPLOY_METHOD))..."
-	cd test/e2e && DEPLOY_METHOD=$(DEPLOY_METHOD) IMAGE_TAG=$(IMAGE_TAG) KUBECONFIG=$(KIND_KUBE_CONFIG) go test ./... -v -ginkgo.v -timeout 30m
+	cd test/e2e && DEPLOY_METHOD=$(DEPLOY_METHOD) IMAGE_TAG=$(IMAGE_TAG) SPARK_VERSION=$(SPARK_VERSION) KUBECONFIG=$(KIND_KUBE_CONFIG) go test ./... -v -ginkgo.v -timeout 30m
 
 ##@ Kustomize
 
@@ -369,10 +369,23 @@ kind-create-cluster: kind ## Create a kind cluster for integration tests.
 kind-load-image: kind-create-cluster docker-build ## Load the image into the kind cluster.
 	$(call kind_load_image,$(IMAGE))
 
-# SPARK_IMAGE is the Spark runtime image used by drivers/executors. Defaults to
-# the same tag used by examples/spark-pi.yaml so manual e2e checks line up with
-# the canonical example. Override on the command line if you need a different one.
+# SPARK_VERSION selects which Spark runtime the e2e suite exercises. It is the one
+# knob to toggle the tested Spark version: it drives the runtime image loaded into
+# kind (below) AND is handed to the e2e tests, which retarget every SparkApplication
+# at it (spec.sparkVersion + image tag; see test/e2e applySparkVersionOverride). So
+# `SPARK_VERSION=4.2.0 make e2e-test` runs the whole matrix cell for 4.2.0. Defaults
+# to the version examples/spark-pi.yaml ships with, so the default run is unchanged.
+SPARK_VERSION ?= 4.0.4
+
+# SPARK_IMAGE is the Spark runtime image used by drivers/executors, derived from
+# SPARK_VERSION so the loaded image and the tests agree. The default version is
+# digest-pinned for reproducibility (and to match examples/spark-pi.yaml); other
+# versions use the plain tag. Override SPARK_IMAGE directly for a bespoke image.
+ifeq ($(SPARK_VERSION),4.0.4)
 SPARK_IMAGE ?= docker.io/apache/spark:4.0.4@sha256:7112c0c0ca07b7d2605163ba91a05e53af39ba7cfcf9886e63141ade3f850456
+else
+SPARK_IMAGE ?= docker.io/apache/spark:$(SPARK_VERSION)
+endif
 
 .PHONY: kind-load-spark-image
 kind-load-spark-image: kind-create-cluster ## Pull the Spark runtime image and load it into the kind cluster.
