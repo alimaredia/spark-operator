@@ -35,11 +35,36 @@ DEP_VERSION := `grep DEP_VERSION= Dockerfile | awk -F\" '{print $$2}'`
 BUILDER := `grep "FROM golang:" Dockerfile | awk '{print $$2}'`
 UNAME := `uname | tr '[:upper:]' '[:lower:]'`
 
-# CONTAINER_TOOL defines the container tool to be used for building images.
-# Be aware that the target commands are only tested with Docker which is
-# scaffolded by default. However, you might want to replace it to use other
-# tools. (i.e. podman)
+# CONTAINER_TOOL defines the container tool to be used for building images and,
+# for the kind-based e2e flow, for hosting the cluster and loading images.
+# Docker is the default; set CONTAINER_TOOL=podman to use Podman instead
+# (e.g. `make e2e-test CONTAINER_TOOL=podman`).
 CONTAINER_TOOL ?= docker
+
+# kind talks to a container runtime to host its nodes and to load images into
+# them. It uses Docker by default; for Podman it needs its (experimental) Podman
+# provider. Derive the provider from CONTAINER_TOOL and export it so every kind
+# invocation below (create/get/load) targets the same runtime as the image build.
+# Left unset (kind's Docker default) for docker or any other tool.
+ifeq ($(CONTAINER_TOOL),podman)
+KIND_EXPERIMENTAL_PROVIDER := podman
+export KIND_EXPERIMENTAL_PROVIDER
+endif
+
+# kind_load_image loads a locally built/pulled image (arg 1) into the kind cluster.
+# `kind load docker-image` cannot reliably see images in rootless Podman's storage
+# (the Podman machine is a remote VM), so for Podman we stream the image through a
+# temporary archive with `podman save` + `kind load image-archive` instead. Docker
+# uses the direct path. mktemp keeps this safe under a parallel `make -j`.
+ifeq ($(CONTAINER_TOOL),podman)
+define kind_load_image
+	tar=$$(mktemp) && $(CONTAINER_TOOL) save $(1) -o "$$tar" && $(KIND) load image-archive "$$tar" --name $(KIND_CLUSTER_NAME) && rm -f "$$tar"
+endef
+else
+define kind_load_image
+	$(KIND) load docker-image --name $(KIND_CLUSTER_NAME) $(1)
+endef
+endif
 
 # Image URL to use all building/pushing image targets
 IMAGE_REGISTRY ?= ghcr.io
@@ -313,7 +338,7 @@ helm-unittest: helm-unittest-plugin ## Run Helm chart unittests.
 
 .PHONY: helm-lint
 helm-lint: ## Run Helm chart lint test.
-	docker run --rm --workdir /workspace --volume "$$(pwd):/workspace" quay.io/helmpack/chart-testing:latest ct lint --target-branch master --validate-maintainers=false
+	$(CONTAINER_TOOL) run --rm --workdir /workspace --volume "$$(pwd):/workspace" quay.io/helmpack/chart-testing:latest ct lint --target-branch master --validate-maintainers=false
 
 .PHONY: helm-docs
 helm-docs: helm-docs-plugin ## Generates markdown documentation for helm charts from requirements and values files.
@@ -342,7 +367,7 @@ kind-create-cluster: kind ## Create a kind cluster for integration tests.
 
 .PHONY: kind-load-image
 kind-load-image: kind-create-cluster docker-build ## Load the image into the kind cluster.
-	$(KIND) load docker-image --name $(KIND_CLUSTER_NAME) $(IMAGE)
+	$(call kind_load_image,$(IMAGE))
 
 # SPARK_IMAGE is the Spark runtime image used by drivers/executors. Defaults to
 # the same tag used by examples/spark-pi.yaml so manual e2e checks line up with
@@ -351,8 +376,8 @@ SPARK_IMAGE ?= docker.io/apache/spark:4.0.4@sha256:7112c0c0ca07b7d2605163ba91a05
 
 .PHONY: kind-load-spark-image
 kind-load-spark-image: kind-create-cluster ## Pull the Spark runtime image and load it into the kind cluster.
-	docker image inspect $(SPARK_IMAGE) >/dev/null 2>&1 || docker pull $(SPARK_IMAGE)
-	$(KIND) load docker-image --name $(KIND_CLUSTER_NAME) $(SPARK_IMAGE)
+	$(CONTAINER_TOOL) image inspect $(SPARK_IMAGE) >/dev/null 2>&1 || $(CONTAINER_TOOL) pull $(SPARK_IMAGE)
+	$(call kind_load_image,$(SPARK_IMAGE))
 
 .PHONY: kind-delete-cluster
 kind-delete-cluster: kind ## Delete the created kind cluster.

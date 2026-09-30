@@ -18,10 +18,12 @@ package e2e_test
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -42,17 +44,38 @@ var _ = Describe("Driver PodDisruptionBudget", func() {
 	Context("when the SparkApplication opts in", func() {
 		var app *v1beta2.SparkApplication
 
+		// pdbOptInCounter gives every spec in this context a distinct app name.
+		// The driver pod and PDB names are derived from the app name, so a shared
+		// name would let a prior spec's still-terminating driver pod collide with
+		// the next spec's create (the native submitter creates the pod by that exact
+		// name -> AlreadyExists -> the app never reaches Submitted and no PDB is made).
+		pdbOptInCounter := 0
+
 		BeforeEach(func() {
-			app = loadSparkPi("e2e-pdb-on")
+			pdbOptInCounter++
+			app = loadSparkPi(fmt.Sprintf("e2e-pdb-on-%d", pdbOptInCounter))
 			app.Spec.DriverPodDisruptionBudget = ptr.To(true)
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		})
 
 		AfterEach(func() {
-			key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
-			if err := k8sClient.Get(ctx, key, app); err == nil {
-				_ = k8sClient.Delete(ctx, app)
+			appKey := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
+			if err := k8sClient.Get(ctx, appKey, app); err == nil {
+				Expect(k8sClient.Delete(ctx, app)).To(Succeed())
 			}
+
+			// Wait for the SparkApplication and its driver pod to be fully gone
+			// before the next spec runs, so teardown cannot leak resources into it.
+			podKey := driverPDBKey(app) // driver pod shares the PDB's derived name
+			Eventually(func() bool {
+				if err := k8sClient.Get(ctx, appKey, &v1beta2.SparkApplication{}); !apierrors.IsNotFound(err) {
+					return false
+				}
+				if err := k8sClient.Get(ctx, podKey, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+					return false
+				}
+				return true
+			}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(BeTrue())
 		})
 
 		It("creates a PDB while the driver is running, and the app completes", func() {

@@ -26,7 +26,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -133,13 +132,16 @@ var _ = Describe("SparkConnect Query", func() {
 			}
 			Expect(hasConnectPort).To(BeTrue(), "service should expose spark-connect-server port 15002")
 
-			By("Reading the operator controller image")
-			operatorDeploy := &appsv1.Deployment{}
+			By("Reading the Spark Connect server image")
+			// The client pod runs spark-shell, so it needs a full Spark image.
+			// The operator image is Spark-free (distroless, native submitter), so
+			// reuse the Spark Connect server pod's image instead.
+			serverPod := &corev1.Pod{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Namespace: ReleaseNamespace,
-				Name:      "spark-operator-controller",
-			}, operatorDeploy)).To(Succeed())
-			operatorImage := operatorDeploy.Spec.Template.Spec.Containers[0].Image
+				Namespace: conn.Namespace,
+				Name:      serverPodName,
+			}, serverPod)).To(Succeed())
+			sparkImage := serverPod.Spec.Containers[0].Image
 
 			By("Creating Spark Connect client pod")
 			clientPod := &corev1.Pod{
@@ -151,7 +153,7 @@ var _ = Describe("SparkConnect Query", func() {
 					Containers: []corev1.Container{
 						{
 							Name:            "spark-connect-client",
-							Image:           operatorImage,
+							Image:           sparkImage,
 							ImagePullPolicy: corev1.PullNever,
 							Command:         []string{"sleep", "infinity"},
 						},
