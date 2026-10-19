@@ -1,0 +1,61 @@
+# NetworkPolicy for the Spark Operator webhook pod (operator-pod scope, HPSTRAT-278).
+# Static manifest — one per install, in the operator namespace (set by the overlay's
+# `namespace:` directive). Not reconciler-generated, so no owner reference.
+#
+# Paths (RHOAIENG-90747 R1-R6):
+#   R3 Ingress  9443  <- kube-apiserver admission requests (failurePolicy: Fail)
+#   R1 Ingress  8080  <- monitoring stack scrape
+#   R5 Egress   53    -> cluster DNS
+#   R3 Egress   6443/443 -> kube-apiserver (manager client + leader-election Lease)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spark-operator-webhook
+  labels:
+    app.kubernetes.io/name: spark-operator
+    app.kubernetes.io/component: webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spark-operator
+      app.kubernetes.io/component: webhook
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # R3 - admission requests from the kube-apiserver on 9443.
+    # The apiserver source is host-network (control-plane nodes), which a
+    # podSelector/namespaceSelector cannot match, so the port is allowed from any
+    # source. Tighten with the OCP host-network policy group where available.
+    - ports:
+        - protocol: TCP
+          port: 9443
+    # R1 - metrics scrape from the OpenShift monitoring stack.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-user-workload-monitoring
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # R5 - DNS.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # R3 - kube-apiserver (manager client + leader-election Lease). The apiserver
+    # VIP DNATs to node IPs, so this is expressed as a port-only rule.
+    - ports:
+        - protocol: TCP
+          port: 6443
+        - protocol: TCP
+          port: 443

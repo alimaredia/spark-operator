@@ -16,6 +16,7 @@ resources:
   - ../../spark-rbac # SA/Role/RoleBinding for Spark driver pods
   - ../../prometheus
   - networkpolicy.yaml
+  - webhook-networkpolicy.yaml # NetworkPolicy for the webhook pod (HPSTRAT-278)
 
 # 3. Delete the Namespace resource (ODH operator manages it)
 #    Add monitoring label to PodMonitor
