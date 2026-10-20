@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
+	"github.com/kubeflow/spark-operator/v2/internal/controller/networkpolicy"
 	"github.com/kubeflow/spark-operator/v2/internal/metrics"
 	"github.com/kubeflow/spark-operator/v2/internal/scheduler"
 	"github.com/kubeflow/spark-operator/v2/internal/scheduler/kubescheduler"
@@ -87,6 +88,12 @@ type Options struct {
 	// DefaultServiceAccount is the name of the service account used by the driver pod
 	// when the SparkApplication does not specify one. An empty value disables the fallback.
 	DefaultServiceAccount string
+
+	// EnableNetworkPolicy gates creation of NetworkPolicies for the driver and
+	// executor pods of each SparkApplication (including those created by a
+	// ScheduledSparkApplication). When false, no NetworkPolicies are created.
+	// Defaults to false.
+	EnableNetworkPolicy bool
 }
 
 // Reconciler reconciles a SparkApplication object.
@@ -130,6 +137,7 @@ func NewReconciler(
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;update;patch
 // +kubebuilder:rbac:groups=extensions,resources=ingresses,verbs=get;create;update;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;create;update;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications/status,verbs=update
@@ -528,6 +536,16 @@ func (r *Reconciler) reconcileRunningSparkApplication(ctx context.Context, req c
 			// picks up live spec flips on running apps.
 			if err := r.ensureDriverPDB(ctx, app); err != nil {
 				return fmt.Errorf("failed to ensure driver PDB: %v", err)
+			}
+
+			// Ensure the blanket operand NetworkPolicy exists in the app's
+			// namespace (gated on --enable-network-policy). Idempotent; the policy
+			// is owner-referenced to the app so kube GC removes it once the last
+			// Spark workload in the namespace is gone.
+			if r.options.EnableNetworkPolicy {
+				if err := networkpolicy.Ensure(ctx, r.client, r.scheme, app, app.Namespace); err != nil {
+					return fmt.Errorf("failed to ensure operand network policy: %v", err)
+				}
 			}
 
 			if err := r.updateSparkApplicationStatus(ctx, app); err != nil {

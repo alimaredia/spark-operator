@@ -97,6 +97,11 @@ var (
 	// path is no-op for existing clusters.
 	enableDriverPDB bool
 
+	// enableNetworkPolicy gates creation of NetworkPolicies for the driver,
+	// executor, and Spark Connect server/executor pods. Defaults to false so the
+	// upgrade path is no-op for existing clusters.
+	enableNetworkPolicy bool
+
 	//WorkQueue
 	workqueueRateLimiterBucketQPS  int
 	workqueueRateLimiterBucketSize int
@@ -236,6 +241,9 @@ func NewStartCommand() *cobra.Command {
 		"Enable creation of a PodDisruptionBudget for Spark driver pods. "+
 			"Each SparkApplication must additionally opt in via "+
 			"spec.driverPodDisruptionBudget=true.")
+	command.Flags().BoolVar(&enableNetworkPolicy, "enable-network-policy", false,
+		"Enable creation of NetworkPolicies for the driver, executor, and Spark Connect "+
+			"server/executor pods in the namespace where each workload runs.")
 
 	command.Flags().IntVar(&workqueueRateLimiterBucketQPS, "workqueue-ratelimiter-bucket-qps", 10, "QPS of the bucket rate of the workqueue.")
 	command.Flags().IntVar(&workqueueRateLimiterBucketSize, "workqueue-ratelimiter-bucket-size", 100, "The token bucket size of the workqueue.")
@@ -579,6 +587,7 @@ func newSparkApplicationReconcilerOptions() sparkapplication.Options {
 		EnableDriverPDB:              enableDriverPDB,
 		DefaultTimeToLiveSeconds:     defaultTimeToLiveSeconds,
 		DefaultServiceAccount:        defaultServiceAccount,
+		EnableNetworkPolicy:          enableNetworkPolicy,
 	}
 	if enableBatchScheduler {
 		options.KubeSchedulerNames = kubeSchedulerNames
@@ -600,6 +609,7 @@ func newSparkConnectReconcilerOptions() sparkconnect.Options {
 		Namespaces:            namespaces,
 		NamespaceSelector:     namespaceSelector,
 		DefaultServiceAccount: defaultServiceAccount,
+		EnableNetworkPolicy:   enableNetworkPolicy,
 	}
 	return options
 }

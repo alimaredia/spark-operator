@@ -39,6 +39,17 @@ patches:
       version: v1
       kind: PodMonitor
       name: spark-operator-podmonitor
+  # Enable operand NetworkPolicies for the driver, executor, and Spark Connect
+  # server/executor pods.
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --enable-network-policy=true
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: spark-operator-controller
 
 # 4. Add ODH-specific labels
 labels:

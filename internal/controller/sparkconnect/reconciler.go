@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1alpha1"
+	"github.com/kubeflow/spark-operator/v2/internal/controller/networkpolicy"
 	"github.com/kubeflow/spark-operator/v2/pkg/common"
 	"github.com/kubeflow/spark-operator/v2/pkg/util"
 )
@@ -64,6 +65,11 @@ type Options struct {
 	// server pod when neither the SparkConnect nor its server pod template specifies one.
 	// An empty value disables the fallback.
 	DefaultServiceAccount string
+
+	// EnableNetworkPolicy gates creation of NetworkPolicies for the Spark Connect
+	// server and executor pods. When false, no NetworkPolicies are created.
+	// Defaults to false.
+	EnableNetworkPolicy bool
 }
 
 // Reconciler reconciles a SparkConnect object.
@@ -192,6 +198,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, options controller.Optio
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects,verbs=get;list;watch
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects/status,verbs=update
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkconnects/finalizers,verbs=update
@@ -232,6 +239,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (reconcile
 
 	if err := r.createOrUpdateServerService(ctx, conn); err != nil {
 		return reconcile.Result{}, err
+	}
+
+	if r.options.EnableNetworkPolicy {
+		if err := networkpolicy.Ensure(ctx, r.client, r.scheme, conn, conn.Namespace); err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to ensure operand network policy: %w", err)
+		}
 	}
 
 	if err := r.updateSparkConnectStatus(ctx, old, conn); err != nil {
