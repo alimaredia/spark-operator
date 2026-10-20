@@ -111,8 +111,23 @@ jobs:
           kubectl get events -A --sort-by='.lastTimestamp' | tail -50
 
           echo ""
+          echo "=== NetworkPolicies ==="
+          kubectl get networkpolicies -A -o wide 2>/dev/null || echo "No NetworkPolicies found"
+
+          echo ""
           echo "=== Operator logs ==="
-          kubectl logs -n spark-operator -l app.kubernetes.io/name=spark-operator --tail=100 2>/dev/null || echo "No operator logs"
+          # The release namespace depends on the install method (the Kustomize
+          # path uses the RHOAI overlay's redhat-ods-applications), so discover
+          # it from the operator pods rather than hardcoding it.
+          operator_ns=$(kubectl get pods -A -l app.kubernetes.io/name=spark-operator \
+            -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null)
+          if [ -n "$operator_ns" ]; then
+            echo "(namespace: $operator_ns)"
+            kubectl logs -n "$operator_ns" -l app.kubernetes.io/name=spark-operator \
+              --all-containers --tail=100 2>/dev/null || echo "No operator logs"
+          else
+            echo "No operator pods found"
+          fi
 
   notify-on-failure:
     if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')

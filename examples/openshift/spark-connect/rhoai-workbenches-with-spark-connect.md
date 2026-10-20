@@ -15,30 +15,35 @@ Create a SparkConnect resource in the `redhat-ods-applications` namespace:
 oc apply -f spark-connect-server-rhoai.yaml
 ```
 
-By default, the required ServiceAccount, Role, RoleBinding, and NetworkPolicy resources exist only in `redhat-ods-applications`. To deploy a SparkConnect resource in a different namespace, you must recreate these resources there. Use the following commands to inspect the originals:
+By default, the required ServiceAccount, Role, and RoleBinding exist only in `redhat-ods-applications`. To deploy a SparkConnect resource in a different namespace, you must recreate those there:
 
 ```bash
 oc get serviceaccount spark-operator-spark -n redhat-ods-applications -o yaml
 oc get role spark-operator-role -n redhat-ods-applications -o yaml
 oc get rolebinding spark-operator-rolebinding -n redhat-ods-applications -o yaml
-oc get networkpolicy spark-operator-allow-internal -n redhat-ods-applications -o yaml
 ```
 
-The NetworkPolicy includes a rule that allows workbenches to communicate with the Spark Connect server on port 15002:
+**NetworkPolicy.** On RHOAI/ODH the operator creates operand NetworkPolicies (the `OperandNetworkPolicy` feature gate), which leave the Spark Connect server **default-deny for ingress** and admit only intra-Spark traffic — so executors can reach it, but a workbench cannot. Workbenches live in their own data-science-project namespaces, so reaching the server's gRPC port (`15002`) is **cross-namespace** and must be allowed by a NetworkPolicy you create **in the SparkConnect server's namespace**:
 
 ```yaml
-- from:
-  - podSelector: {}
-  - namespaceSelector:
-      matchLabels:
-        opendatahub.io/dashboard: "true"
-    podSelector:
-      matchLabels:
-        opendatahub.io/workbenches: "true"
-  ports:
-  - port: 15002
-    protocol: TCP
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spark-connect-from-workbenches
+  namespace: redhat-ods-applications   # the SparkConnect server's namespace
+spec:
+  podSelector:
+    matchLabels: {spark-role: connect-server}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {opendatahub.io/dashboard: "true"}}
+          podSelector: {matchLabels: {opendatahub.io/workbenches: "true"}}
+      ports:
+        - {protocol: TCP, port: 15002}
 ```
+
+This mirrors the workbench rule that the legacy `spark-operator-allow-internal` policy provided; see [network-policy-pod-inventory.md](../docs/network-policy-pod-inventory.md) for the full model (including why consumer ingress is user-managed). If you run the server in a namespace other than `redhat-ods-applications`, create this NetworkPolicy there too.
 
 ### Create a Service for the Spark Connect Server
 

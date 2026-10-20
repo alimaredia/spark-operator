@@ -11,6 +11,12 @@ Port-forwarding is ideal for:
 
 For production deployments with shareable HTTPS URLs, see [SparkUI-Route.md](SparkUI-Route.md).
 
+> **Note:** Port-forward works even when the operator's operand NetworkPolicies
+> are enabled (RHOAI/ODH). Port-forward traffic is proxied by the API server
+> through the node (kubelet), which NetworkPolicy always permits, so **no extra
+> NetworkPolicy is required** — unlike Route access, which is cross-namespace. See
+> [network-policy-pod-inventory.md](../../docs/network-policy-pod-inventory.md).
+
 ## Prerequisites
 
 - A running SparkApplication submitted via Kubeflow Spark Operator

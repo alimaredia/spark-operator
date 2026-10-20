@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1alpha1"
+	"github.com/kubeflow/spark-operator/v2/internal/controller/networkpolicy"
 	"github.com/kubeflow/spark-operator/v2/pkg/common"
 	"github.com/kubeflow/spark-operator/v2/pkg/util"
 )
@@ -232,6 +233,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (reconcile
 
 	if err := r.createOrUpdateServerService(ctx, conn); err != nil {
 		return reconcile.Result{}, err
+	}
+
+	if err := networkpolicy.EnsureForSparkConnect(ctx, r.client, r.scheme, conn); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to ensure operand network policies: %w", err)
 	}
 
 	if err := r.updateSparkConnectStatus(ctx, old, conn); err != nil {

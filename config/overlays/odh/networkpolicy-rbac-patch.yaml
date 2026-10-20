@@ -3,4 +3,4 @@
   value:
     apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    verbs: ["create", "delete", "update"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

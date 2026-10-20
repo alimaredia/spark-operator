@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
+	"github.com/kubeflow/spark-operator/v2/internal/controller/networkpolicy"
 	"github.com/kubeflow/spark-operator/v2/internal/metrics"
 	"github.com/kubeflow/spark-operator/v2/internal/scheduler"
 	"github.com/kubeflow/spark-operator/v2/internal/scheduler/kubescheduler"
@@ -528,6 +529,12 @@ func (r *Reconciler) reconcileRunningSparkApplication(ctx context.Context, req c
 			// picks up live spec flips on running apps.
 			if err := r.ensureDriverPDB(ctx, app); err != nil {
 				return fmt.Errorf("failed to ensure driver PDB: %v", err)
+			}
+
+			// Ensure the operand NetworkPolicies (gated on the OperandNetworkPolicy
+			// feature gate, off by default). No-op when the gate is disabled.
+			if err := networkpolicy.EnsureForSparkApplication(ctx, r.client, r.scheme, app, app.Status.SparkApplicationID); err != nil {
+				return fmt.Errorf("failed to ensure operand network policies: %v", err)
 			}
 
 			if err := r.updateSparkApplicationStatus(ctx, app); err != nil {
