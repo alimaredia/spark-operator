@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
+	"github.com/kubeflow/spark-operator/v2/internal/controller/networkpolicy"
 	"github.com/kubeflow/spark-operator/v2/internal/metrics"
 	"github.com/kubeflow/spark-operator/v2/internal/scheduler"
 	"github.com/kubeflow/spark-operator/v2/internal/scheduler/kubescheduler"
@@ -130,6 +131,7 @@ func NewReconciler(
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;update;patch
 // +kubebuilder:rbac:groups=extensions,resources=ingresses,verbs=get;create;update;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;create;update;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications/status,verbs=update
@@ -528,6 +530,14 @@ func (r *Reconciler) reconcileRunningSparkApplication(ctx context.Context, req c
 			// picks up live spec flips on running apps.
 			if err := r.ensureDriverPDB(ctx, app); err != nil {
 				return fmt.Errorf("failed to ensure driver PDB: %v", err)
+			}
+
+			// Ensure the blanket operand NetworkPolicy exists in the app's
+			// namespace. Idempotent; the policy is owner-referenced to the app so
+			// kube GC removes it once the last Spark workload in the namespace is
+			// gone.
+			if err := networkpolicy.Ensure(ctx, r.client, r.scheme, app, app.Namespace); err != nil {
+				return fmt.Errorf("failed to ensure operand network policy: %v", err)
 			}
 
 			if err := r.updateSparkApplicationStatus(ctx, app); err != nil {
