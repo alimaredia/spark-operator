@@ -44,10 +44,28 @@ kind-cleanup: ## Delete the Kind cluster and cleanup resources.
 ## Use INSTALL_METHOD to control how the operator is deployed.
 ## Use CLEANUP=false to skip cleanup (default: true).
 
+# Image built from source when SPARK_OPERATOR_IMAGE is not provided. Matches the
+# image CI loads (make kind-load-image IMAGE_TAG=local) and is pulled
+# IfNotPresent, so the Kind-loaded image is used without reaching a registry.
+# Passed to docker-build as IMAGE= rather than IMAGE_TAG=, so this one value
+# stays authoritative: with only the tag passed, a change to the root Makefile's
+# IMAGE_REGISTRY/IMAGE_REPOSITORY would build one name and load another.
+E2E_LOCAL_IMAGE ?= ghcr.io/kubeflow/spark-operator/controller:local
+
 .PHONY: e2e-rhoai-test
 e2e-rhoai-test: ## Run midstream RHOAI e2e tests (kustomize or preinstalled).
 	@echo "Running RHOAI e2e tests (install_method=$(INSTALL_METHOD))..."
-	cd $(MAKEFILE_DIR) && INSTALL_METHOD=$(INSTALL_METHOD) SPARK_OPERATOR_IMAGE=$(SPARK_OPERATOR_IMAGE) \
+	@IMAGE="$(SPARK_OPERATOR_IMAGE)"; \
+	if [ -z "$$IMAGE" ]; then \
+		echo "SPARK_OPERATOR_IMAGE not set; building operator image from source..."; \
+		$(MAKE) -C $(REPO_ROOT) docker-build IMAGE=$(E2E_LOCAL_IMAGE); \
+		echo "Loading $(E2E_LOCAL_IMAGE) into Kind cluster $(KIND_CLUSTER_NAME)..."; \
+		kind load docker-image --name $(KIND_CLUSTER_NAME) $(E2E_LOCAL_IMAGE); \
+		IMAGE="$(E2E_LOCAL_IMAGE)"; \
+	else \
+		echo "Using provided SPARK_OPERATOR_IMAGE=$$IMAGE"; \
+	fi; \
+	cd $(MAKEFILE_DIR) && INSTALL_METHOD=$(INSTALL_METHOD) SPARK_OPERATOR_IMAGE="$$IMAGE" \
 		go test ./... -v -ginkgo.v -timeout 30m -coverprofile $(REPO_ROOT)/cover-e2e-rhoai.out
 
 .PHONY: e2e-kueue-test

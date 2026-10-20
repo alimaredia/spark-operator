@@ -46,7 +46,7 @@ spec:
       - key: kubernetes.io/metadata.name
         operator: In
         values:
-          - spark-operator
+          - spark-test
   fairSharing:
     weight: 1
   preemption:
@@ -73,7 +73,7 @@ spec:
       - key: kubernetes.io/metadata.name
         operator: In
         values:
-          - spark-operator
+          - spark-test
   fairSharing:
     weight: 1
   preemption:
@@ -101,7 +101,7 @@ spec:
       - key: kubernetes.io/metadata.name
         operator: In
         values:
-          - spark-operator
+          - spark-test
   preemption:
     withinClusterQueue: LowerPriority
   resourceGroups:
@@ -118,7 +118,7 @@ apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
   name: team-a-lq
-  namespace: spark-operator
+  namespace: spark-test
 spec:
   clusterQueue: team-a-cq
 ---
@@ -126,7 +126,7 @@ apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
   name: team-b-lq
-  namespace: spark-operator
+  namespace: spark-test
 spec:
   clusterQueue: team-b-cq
 ---
@@ -134,6 +134,6 @@ apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
   name: priority-lq
-  namespace: spark-operator
+  namespace: spark-test
 spec:
   clusterQueue: priority-cq

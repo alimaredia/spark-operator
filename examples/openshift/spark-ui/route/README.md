@@ -12,6 +12,37 @@ HTTPS for persistent, shareable access without requiring local port-forwarding.
 - Spark Operator installed and running
 - Your cluster's apps domain (get it with: `oc get ingress.config.openshift.io cluster -o jsonpath='{.spec.domain}'`)
 
+> **NetworkPolicy requirement (RHOAI/ODH).** When the operator's operand
+> NetworkPolicies are enabled (the `OperandNetworkPolicy` feature gate, on in the
+> RHOAI/ODH overlays), the driver pod is **default-deny for ingress** and only
+> admits intra-Spark traffic. The OpenShift router reaching the driver's `4040`
+> from the `openshift-ingress` namespace is **cross-namespace**, so the Route
+> will not connect until you add a NetworkPolicy admitting it. No NetworkPolicy is
+> shipped for consumers, so create this yourself in the workload namespace, once
+> (alongside your RBAC):
+>
+> ```yaml
+> apiVersion: networking.k8s.io/v1
+> kind: NetworkPolicy
+> metadata:
+>   name: spark-ui-from-router
+>   namespace: spark-test            # your workload namespace
+> spec:
+>   podSelector:
+>     matchLabels: {spark-role: driver}
+>   policyTypes: [Ingress]
+>   ingress:
+>     - from:
+>         - namespaceSelector:
+>             matchLabels: {network.openshift.io/policy-group: ingress}
+>       ports:
+>         - {protocol: TCP, port: 4040}   # or your custom spark.ui.port
+> ```
+>
+> See [network-policy-pod-inventory.md](../../docs/network-policy-pod-inventory.md)
+> for the full model. If operand NetworkPolicies are not enabled, no extra policy
+> is needed.
+
 ## Example Configuration
 
 First, get your cluster's apps domain:

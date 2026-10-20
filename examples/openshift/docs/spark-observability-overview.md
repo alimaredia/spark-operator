@@ -30,6 +30,13 @@ Access the built-in Spark UI for running jobs to view:
 
 **Recommendation:** Route-based access for production, port-forward for development.
 
+> **NetworkPolicy note (RHOAI/ODH).** When operand NetworkPolicies are enabled
+> (the `OperandNetworkPolicy` feature gate), driver pods are default-deny for
+> ingress. **Route** access and **cross-namespace Prometheus scraping** of driver
+> metrics (served on the UI port) then require a NetworkPolicy admitting the
+> router / monitoring tier; **port-forward** needs none. See
+> [network-policy-pod-inventory.md](./network-policy-pod-inventory.md).
+
 ---
 
 ## Post-Mortem Analysis - Spark History Server

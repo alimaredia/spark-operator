@@ -194,7 +194,7 @@ spec:
     - key: kubernetes.io/metadata.name
       operator: In
       values:
-      - spark-operator
+      - spark-test
   resourceGroups:
   - coveredResources: ["cpu", "memory"]
     flavors:
@@ -221,7 +221,7 @@ apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
   name: spark-lq
-  namespace: spark-operator
+  namespace: spark-test
 spec:
   clusterQueue: spark-cq
 ```
@@ -238,7 +238,7 @@ Verify:
 
 ```bash
 oc get clusterqueue spark-cq
-oc get localqueue spark-lq -n spark-operator
+oc get localqueue spark-lq -n spark-test
 ```
 
 Both should show as `Active`.
@@ -381,9 +381,15 @@ EOF
 ### Spark Driver RBAC
 
 The Spark driver pod needs a ServiceAccount with permissions to create executor
-pods. This RBAC is automatically applied when you install the Spark Operator
-via Kustomize (`oc apply -k config/default/`). The resources are defined in
-`config/rbac/spark-application-rbac.yaml` and include:
+pods. This RBAC is **not** part of `oc apply -k config/default/` — it belongs in
+each workload namespace, not the operator's. It lives in `config/spark-rbac/`;
+apply it to every namespace where SparkApplications will run:
+
+```bash
+oc apply -k config/spark-rbac -n spark-test
+```
+
+That installs:
 
 - A `spark-operator-spark` ServiceAccount
 - A Role granting pod, configmap, PVC, and service management
@@ -392,7 +398,7 @@ via Kustomize (`oc apply -k config/default/`). The resources are defined in
 Verify the ServiceAccount exists:
 
 ```bash
-oc get serviceaccount spark-operator-spark -n spark-operator
+oc get serviceaccount spark-operator-spark -n spark-test
 ```
 
 ### Non-Admin User RBAC (Optional)
@@ -411,7 +417,7 @@ managed label. Apply this to every namespace where SparkApplications will
 be submitted:
 
 ```bash
-oc label namespace spark-operator kueue.openshift.io/managed=true --overwrite
+oc label namespace spark-test kueue.openshift.io/managed=true --overwrite
 ```
 
 Without this label, SparkApplications are submitted directly to the Spark
@@ -433,19 +439,19 @@ oc get kueues.kueue.openshift.io cluster -o jsonpath='{.spec.config.integrations
 
 # 4. ClusterQueue and LocalQueue are active
 oc get clusterqueue
-oc get localqueue -n spark-operator
+oc get localqueue -n spark-test
 
 # 5. Namespace is labeled
-oc get namespace spark-operator --show-labels | grep kueue
+oc get namespace spark-test --show-labels | grep kueue
 
 # 6. Submit a test SparkApplication
 oc apply -f examples/openshift/kueue/spark-pi-kueue.yaml
 
 # 7. Verify Kueue intercepted it (should see suspend=true initially)
-oc get sparkapplication spark-pi-kueue -n spark-operator -o jsonpath='{.spec.suspend}'
+oc get sparkapplication spark-pi-kueue -n spark-test -o jsonpath='{.spec.suspend}'
 
 # 8. Watch the lifecycle
-oc get sparkapplication spark-pi-kueue -n spark-operator -w
+oc get sparkapplication spark-pi-kueue -n spark-test -w
 ```
 
 Expected state transitions: `""` → `Suspended` → `Resuming` → `New` →
@@ -526,7 +532,7 @@ resource you can't set finalizers on`
 **Fix:**
 
 ```bash
-oc label namespace spark-operator kueue.openshift.io/managed=true --overwrite
+oc label namespace spark-test kueue.openshift.io/managed=true --overwrite
 ```
 
 ### `x509: certificate signed by unknown authority` on SparkApplication Create
@@ -579,8 +585,8 @@ ClusterQueue has available quota.
 **Diagnosis:**
 
 ```bash
-oc get workloads -n spark-operator
-oc describe workload <workload-name> -n spark-operator
+oc get workloads -n spark-test
+oc describe workload <workload-name> -n spark-test
 oc get clusterqueue spark-cq -o yaml
 ```
 
@@ -622,11 +628,11 @@ For general debugging, use these commands to inspect the Kueue lifecycle:
 
 ```bash
 # Namespace events (sorted by time)
-oc get events -n spark-operator --sort-by='.lastTimestamp' | tail -20
+oc get events -n spark-test --sort-by='.lastTimestamp' | tail -20
 
 # Workload details
-oc get workloads -n spark-operator
-oc describe workload <workload-name> -n spark-operator
+oc get workloads -n spark-test
+oc describe workload <workload-name> -n spark-test
 
 # Kueue controller logs
 oc logs -n openshift-kueue-operator deployment/kueue-controller-manager --tail=100

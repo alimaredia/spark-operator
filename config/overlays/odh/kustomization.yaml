@@ -78,6 +78,16 @@ patches:
       - op: add
         path: /spec/template/metadata/labels/app.opendatahub.io~1sparkoperator
         value: "true"
+  # Enable operand NetworkPolicy creation (off by default upstream).
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --feature-gates=OperandNetworkPolicy=true
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: spark-operator-controller
 
 # 4. Add ODH-specific labels (metadata only, not selectors)
 labels:

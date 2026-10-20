@@ -13,7 +13,7 @@ spec:
       - key: kubernetes.io/metadata.name
         operator: In
         values:
-          - spark-operator
+          - spark-test
   resourceGroups:
   - coveredResources: ["cpu", "memory"]
     flavors:
@@ -28,6 +28,6 @@ apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
   name: spark-lq
-  namespace: spark-operator
+  namespace: spark-test
 spec:
   clusterQueue: spark-cq

@@ -9,7 +9,13 @@ Port-forwarding is ideal for:
 - **Debugging individual jobs** - Inspect running applications on your workstation
 - **Environments without Routes** - When OpenShift Routes or Ingress are not configured
 
-For production deployments with shareable HTTPS URLs, see [SparkUI-Route.md](SparkUI-Route.md).
+For production deployments with shareable HTTPS URLs, see [the Route guide](../route/README.md).
+
+> **Note:** Port-forward works even when the operator's operand NetworkPolicies
+> are enabled (RHOAI/ODH). Port-forward traffic is proxied by the API server
+> through the node (kubelet), which NetworkPolicy always permits, so **no extra
+> NetworkPolicy is required** — unlike Route access, which is cross-namespace. See
+> [network-policy-pod-inventory.md](../../docs/network-policy-pod-inventory.md).
 
 ## Prerequisites
 
@@ -96,7 +102,7 @@ Port-forwarding has several limitations for production use:
 | **No authentication** | Anyone on localhost can access | Routes support TLS and authentication |
 | **Manual process** | Must identify pod and run command each time | Routes auto-update with DNS |
 
-For production deployments, see [SparkUI-Route.md](SparkUI-Route.md) for persistent HTTPS access.
+For production deployments, see [the Route guide](../route/README.md) for persistent HTTPS access.
 
 ## Troubleshooting
 
@@ -153,6 +159,6 @@ kill %1
 
 ## Next Steps
 
-- [Configure OpenShift Routes for production access](SparkUI-Route.md)
+- [Configure OpenShift Routes for production access](../route/README.md)
 - [Deploy Spark History Server for completed job analysis](SparkHistoryServer.md)
 - [Configure event logging for historical analysis](EventLogging.md)

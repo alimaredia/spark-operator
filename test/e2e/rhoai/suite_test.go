@@ -43,6 +43,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -103,7 +104,9 @@ var _ = BeforeSuite(func() {
 	}
 	ReleaseNamespace = os.Getenv("RELEASE_NAMESPACE")
 	if ReleaseNamespace == "" {
-		ReleaseNamespace = "spark-operator"
+		// The Kustomize install uses the RHOAI overlay, which stamps all
+		// resources into redhat-ods-applications.
+		ReleaseNamespace = "redhat-ods-applications"
 	}
 	sparkAppImage = os.Getenv("SPARK_APP_IMAGE")
 	logf.Log.Info("Using install method", "method", installMethod)
@@ -275,11 +278,39 @@ var _ = BeforeSuite(func() {
 		}
 		Expect(k8sClient.Create(context.TODO(), srcRB)).NotTo(HaveOccurred())
 	}
+
+	// The RHOAI/ODH overlays enable operand NetworkPolicies, which leave
+	// operand pods default-deny for consumer ingress. Expose the Spark UI
+	// (4040) and Spark Connect gRPC (15002) to same-namespace consumers in the
+	// test namespace - the namespace-enablement step a user performs alongside
+	// RBAC. (Selecting by label means it works before the workload pods exist.)
+	By("Creating the consumer NetworkPolicy in the test namespace")
+	consumerNP := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "spark-operator-allow-consumers", Namespace: TestNamespace},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      "spark-role",
+					Operator: metav1.LabelSelectorOpIn,
+					Values:   []string{"driver", "connect-server"},
+				}},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{{
+				From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
+				Ports: []networkingv1.NetworkPolicyPort{
+					{Port: ptr.To(intstr.FromInt(4040))},
+					{Port: ptr.To(intstr.FromInt(15002))},
+				},
+			}},
+		},
+	}
+	Expect(k8sClient.Create(context.TODO(), consumerNP)).NotTo(HaveOccurred())
 })
 
 var _ = AfterSuite(func() {
 	if origParamsEnv != nil {
-		kustomizeDir := filepath.Join(repoRoot, "config", "default")
+		kustomizeDir := filepath.Join(repoRoot, "config", "overlays", "rhoai")
 		paramsEnvPath := filepath.Join(kustomizeDir, "params.env")
 		Expect(os.WriteFile(paramsEnvPath, origParamsEnv, 0644)).NotTo(HaveOccurred())
 	}
@@ -375,13 +406,15 @@ func uninstallHelm() {
 
 func installWithKustomize() {
 	By("Installing the Spark operator using Kustomize manifests")
-	kustomizeDir := filepath.Join(repoRoot, "config", "default")
+	kustomizeDir := filepath.Join(repoRoot, "config", "overlays", "rhoai")
 
 	operatorImage := os.Getenv("SPARK_OPERATOR_IMAGE")
 	if operatorImage != "" {
 		By(fmt.Sprintf("Overriding operator image to %s", operatorImage))
 		overrideParamsEnvImage(kustomizeDir, operatorImage)
 	}
+
+	ensurePodMonitorCRDForKIND()
 
 	By("Applying Kustomize manifests")
 	output, err := runCommand("kubectl", "apply", "-k", kustomizeDir, "--server-side=true", "--force-conflicts")
@@ -399,10 +432,58 @@ func installWithKustomize() {
 
 func uninstallKustomize() {
 	By("Uninstalling the Spark operator Kustomize manifests")
-	kustomizeDir := filepath.Join(repoRoot, "config", "default")
+	kustomizeDir := filepath.Join(repoRoot, "config", "overlays", "rhoai")
 	output, err := runCommand("kubectl", "delete", "-k", kustomizeDir, "--ignore-not-found=true")
 	logf.Log.Info("kubectl delete -k output", "output", output)
 	Expect(err).NotTo(HaveOccurred(), "Failed to delete kustomize manifests: %s", output)
+}
+
+// ensurePodMonitorCRDForKIND installs a minimal podmonitors.monitoring.coreos.com
+// CRD on non-OpenShift clusters. The RHOAI overlay ships a PodMonitor, but KIND
+// has no Prometheus Operator, so `kubectl apply -k` would otherwise fail with
+// "no matches for kind PodMonitor". On OpenShift the real CRD already exists.
+func ensurePodMonitorCRDForKIND() {
+	if runningOnOpenShift() {
+		return
+	}
+
+	By("Installing a minimal PodMonitor CRD for KIND (no Prometheus Operator present)")
+	const podMonitorCRD = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: podmonitors.monitoring.coreos.com
+spec:
+  group: monitoring.coreos.com
+  names:
+    kind: PodMonitor
+    listKind: PodMonitorList
+    plural: podmonitors
+    singular: podmonitor
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+`
+	crdFile, err := os.CreateTemp("", "podmonitor-crd-*.yaml")
+	Expect(err).NotTo(HaveOccurred())
+	defer func() { _ = os.Remove(crdFile.Name()) }()
+	_, err = crdFile.WriteString(podMonitorCRD)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(crdFile.Close()).NotTo(HaveOccurred())
+
+	output, err := runCommand("kubectl", "apply", "-f", crdFile.Name())
+	logf.Log.Info("kubectl apply PodMonitor CRD output", "output", output)
+	Expect(err).NotTo(HaveOccurred(), "Failed to apply PodMonitor CRD: %s", output)
+
+	output, err = runCommand("kubectl", "wait", "--for=condition=Established",
+		"crd/podmonitors.monitoring.coreos.com", "--timeout=60s")
+	logf.Log.Info("kubectl wait PodMonitor CRD output", "output", output)
+	Expect(err).NotTo(HaveOccurred(), "PodMonitor CRD not Established: %s", output)
 }
 
 func overrideParamsEnvImage(kustomizeDir, image string) {

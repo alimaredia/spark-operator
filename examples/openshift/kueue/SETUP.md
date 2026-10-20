@@ -68,7 +68,7 @@ Verify:
 
 ```bash
 oc get clusterqueue spark-cq
-oc get localqueue spark-lq -n spark-operator
+oc get localqueue spark-lq -n spark-test
 ```
 
 ## Step 4: Grant Kueue RBAC for SparkApplication
@@ -104,22 +104,35 @@ subjects:
 EOF
 ```
 
-## Step 5: Label the Namespace
+## Step 5: Create and Label the Workload Namespace
 
-Kueue's mutating webhook only intercepts resources in namespaces with this label:
+Spark workloads run in their own namespace, never the operator's — see
+[network-policy-pod-inventory.md](../docs/network-policy-pod-inventory.md). This
+guide uses `spark-test`; substitute your own, and keep it consistent with the
+LocalQueue namespaces in `examples/openshift/kueue/*.yaml`.
+
+Kueue's mutating webhook only intercepts resources in namespaces carrying its
+label:
 
 ```bash
-oc label namespace spark-operator kueue.openshift.io/managed=true --overwrite
+oc new-project spark-test
+oc label namespace spark-test kueue.openshift.io/managed=true --overwrite
 ```
 
-## Step 6: Verify Spark Driver RBAC
+## Step 6: Enable the Namespace for Spark
 
-The Spark driver RBAC (ServiceAccount, Role, RoleBinding) is automatically
-created when the operator is installed via `oc apply -k config/default/`.
-Verify it exists:
+`config/default/` installs the operator but deliberately does **not** include the
+Spark driver RBAC, which belongs in each workload namespace. Apply it there:
 
 ```bash
-oc get serviceaccount spark-operator-spark -n spark-operator
+oc apply -k config/spark-rbac -n spark-test
+```
+
+That creates the ServiceAccount, Role, and RoleBinding the driver needs to manage
+its executor pods. Verify:
+
+```bash
+oc get serviceaccount spark-operator-spark -n spark-test
 ```
 
 ## Step 7: Submit a SparkApplication
@@ -134,16 +147,16 @@ The `kueue.x-k8s.io/queue-name: spark-lq` label tells Kueue to manage this app.
 
 ```bash
 # Watch SparkApplication status
-oc get sparkapplication spark-pi-kueue -n spark-operator -w
+oc get sparkapplication spark-pi-kueue -n spark-test -w
 
 # Check Kueue Workload objects
-oc get workloads -n spark-operator
+oc get workloads -n spark-test
 
 # Check pods
-oc get pods -n spark-operator | grep spark-pi-kueue
+oc get pods -n spark-test | grep spark-pi-kueue
 
 # Check events
-oc get events -n spark-operator --sort-by='.lastTimestamp' | tail -20
+oc get events -n spark-test --sort-by='.lastTimestamp' | tail -20
 ```
 
 ### Expected Lifecycle
@@ -248,8 +261,8 @@ Verify the resources:
 ```bash
 oc get workloadpriorityclasses
 oc get clusterqueue team-a-cq team-b-cq
-oc get localqueue team-a-lq team-b-lq -n spark-operator
-oc get serviceaccount spark-nonadmin -n spark-operator
+oc get localqueue team-a-lq team-b-lq -n spark-test
+oc get serviceaccount spark-nonadmin -n spark-test
 ```
 
 The Kueue CR must have FairSharing enabled (`kueue-cr.yaml` includes this by default):
@@ -322,7 +335,7 @@ Without proper cohort configuration, ClusterQueues cannot borrow from each other
 
 ```bash
 # Delete all SparkApplications across all namespaces
-oc delete sparkapplication -n spark-operator --all
+oc delete sparkapplication -n spark-test --all
 oc delete sparkapplication -n tenant-a --all --ignore-not-found
 oc delete sparkapplication -n tenant-b --all --ignore-not-found
 
@@ -357,7 +370,7 @@ If you see `cannot set blockOwnerDeletion if an ownerReference refers to a resou
 The namespace is missing the managed label. Apply it:
 
 ```bash
-oc label namespace spark-operator kueue.openshift.io/managed=true --overwrite
+oc label namespace spark-test kueue.openshift.io/managed=true --overwrite
 ```
 
 ### `x509: certificate signed by unknown authority` on SparkApplication create
@@ -398,7 +411,7 @@ oc get cohorts.kueue.x-k8s.io
 
 ### Multi-tenancy tests fail — SparkApplications not created in tenant namespaces
 
-The Spark Operator must be configured to watch `tenant-a` and `tenant-b` namespaces. If using Kustomize deployment, check the operator's `--namespaces` flag or set it to watch all namespaces. Also verify the Kueue RBAC (Step 4) applies cluster-wide, not just to `spark-operator` namespace.
+The Spark Operator must be configured to watch `tenant-a` and `tenant-b` namespaces. If using Kustomize deployment, check the operator's `--namespaces` flag or set it to watch all namespaces. Also verify the Kueue RBAC (Step 4) applies cluster-wide, not just to the `spark-test` namespace.
 
 ### `install plan is not available` during bundle install
 

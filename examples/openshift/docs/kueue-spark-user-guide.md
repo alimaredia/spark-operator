@@ -63,7 +63,7 @@ apiVersion: sparkoperator.k8s.io/v1beta2
 kind: SparkApplication
 metadata:
   name: spark-pi-kueue
-  namespace: spark-operator
+  namespace: spark-test
   labels:
     kueue.x-k8s.io/queue-name: spark-lq
 spec:

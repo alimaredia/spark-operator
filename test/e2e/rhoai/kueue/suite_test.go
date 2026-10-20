@@ -83,13 +83,30 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 
-	By("Ensuring namespace exists: " + ReleaseNamespace)
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ReleaseNamespace}}
 	createCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	By("Ensuring namespace exists: " + ReleaseNamespace)
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ReleaseNamespace}}
 	err = k8sClient.Create(createCtx, ns)
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace %s", ReleaseNamespace)
+	}
+
+	// The workload namespace is separate from the operator's: Spark workloads do
+	// not run where the operator runs. It carries Kueue's managed label, without
+	// which Kueue's webhook never intercepts the SparkApplications under test and
+	// every admission assertion here would fail.
+	By("Ensuring workload namespace exists: " + KueueTestNamespace)
+	workloadNS := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   KueueTestNamespace,
+			Labels: map[string]string{"kueue.openshift.io/managed": "true"},
+		},
+	}
+	err = k8sClient.Create(createCtx, workloadNS)
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace %s", KueueTestNamespace)
 	}
 
 	By("Kueue test environment setup complete")

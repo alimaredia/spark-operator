@@ -1,0 +1,48 @@
+#
+# Copyright 2026 The Kubeflow authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Admits RHOAI workbench pods to the Spark Connect server's gRPC port.
+#
+# On RHOAI/ODH the operator creates operand NetworkPolicies (the
+# OperandNetworkPolicy feature gate), which leave the Connect server
+# default-deny for ingress and admit only intra-Spark traffic. Consumer ingress
+# is intentionally left to the user, so this policy is what lets a workbench
+# connect. It must live in the SparkConnect server's namespace.
+#
+# Both selectors in the single `from` peer apply together: the namespace must be
+# an RHOAI data science project AND the pod must be a workbench. An unlabelled
+# pod in a data science project is still denied.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spark-connect-from-workbenches
+  namespace: spark-workloads
+spec:
+  podSelector:
+    matchLabels:
+      spark-role: connect-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              opendatahub.io/dashboard: "true"
+          podSelector:
+            matchLabels:
+              opendatahub.io/workbenches: "true"
+      ports:
+        - protocol: TCP
+          port: 15002

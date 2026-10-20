@@ -41,7 +41,10 @@ import (
 )
 
 const (
-	KueueTestNamespace  = "spark-operator"
+	// Workload namespace, matching the LocalQueue namespace in
+	// examples/openshift/kueue/*.yaml. Deliberately not the operator's own
+	// namespace: Spark workloads do not belong there.
+	KueueTestNamespace  = "spark-test"
 	KueueLocalQueue     = "spark-lq"
 	KueueClusterQueue   = "spark-cq"
 	KueueResourceFlavor = "spark-rf"
