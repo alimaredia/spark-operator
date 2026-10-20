@@ -82,91 +82,108 @@ Common label constants (`pkg/common/spark.go`): `LabelLaunchedBySparkOperator`, 
 
 ## NetworkPolicy design — operand pods (implemented)
 
-The operator creates a **single blanket NetworkPolicy per namespace** — `spark-operator-operands` — covering **all** operand pods (#3 SparkApplication driver, #4 executor, #5 SparkConnect server, #6 SparkConnect executor), rather than one policy per pod type or per application instance. It is built by `internal/controller/networkpolicy` and invoked from both the SparkApplication and SparkConnect reconcilers.
+The operator creates operand NetworkPolicies via `internal/controller/networkpolicy`, invoked from both the SparkApplication and SparkConnect reconcilers, **unconditionally** (no feature flag). It uses **three** policies rather than one blanket, specifically so it composes cleanly with Spark 4.2's own executor policy (see *Spark 4.2 interaction* below):
 
-- **Always on:** the operator creates the policy unconditionally — there is no feature flag. (Egress is allow-all and the consumer ports are open to all namespaces, so enabling it does not block previously-working UI/metrics/Connect-client paths.)
-- **Selector / scope:** selects every operand pod via `sparkoperator.k8s.io/launched-by-spark-operator=true` in the workload's namespace. This also covers SparkApplications created by a ScheduledSparkApplication, since those reconcile through the SparkApplication controller.
-- **Lifecycle (cleanup):** each SparkApplication / SparkConnect with operands in the namespace is added as a **non-controller owner reference** on the shared policy. The Kubernetes garbage collector deletes the policy automatically once the **last** such workload in the namespace is removed — no manual last-app detection.
+| Policy | Scope | Selects | Purpose |
+|--------|-------|---------|---------|
+| `spark-operator-operand-egress` | per namespace (blanket) | all operands (`launched-by-spark-operator`) | allow-all **egress** |
+| `spark-operator-operand-ingress` | per namespace (blanket) | **non-executor** operands (`spark-role in {driver, connect-server}`) | intra-Spark ingress + Spark UI/metrics (4040) and Connect gRPC (15002) from any namespace |
+| `<workload>-executor` | **per workload** | that workload's executors | same-app ingress only — **identical to Spark's `NetworkPolicyFeatureStep` (SPARK-55653)** |
+
+- **Executor ingress is per-app**, keyed on `spark-app-selector=<appID>` for SparkApplications (exactly Spark 4.2's shape) and on `connect-name=<conn>` for SparkConnect (same pod set as the Connect server's `spark-app-selector`). Executors are **not** selected by the blanket ingress policy.
+- **Scope:** covers SparkApplications created by a ScheduledSparkApplication too, since those reconcile through the SparkApplication controller.
+- **Lifecycle (cleanup):** every SparkApplication / SparkConnect is added as a **non-controller owner reference** on the policies it touches; the Kubernetes garbage collector deletes each once its last owner is gone (the blanket policies when the last workload in the namespace leaves; a `<workload>-executor` policy when that workload is deleted). No manual last-app detection.
 
 ### Requirement → design mapping
 
 | R | Dimension | Direction | How addressed |
 |---|-----------|-----------|---------------|
-| **R1** | Monitoring | Ingress | Driver metrics are served on the UI port (4040, `/metrics/prometheus`), so the 4040 rule below also admits the monitoring stack. Executor/custom metric ports are not covered. |
-| **R2** | Gateway/router + clients | Ingress | Spark UI (**4040**) and Spark Connect gRPC (**15002**) from **any namespace** (`namespaceSelector: {}`), so cross-namespace consumers — an ingress router, the monitoring stack, Spark Connect clients such as workbenches — are not blocked. |
-| **R3** | API server | Egress | Covered by allow-all egress. |
-| **R4** | Intra-component | Ingress + Egress | Ingress from any operand pod in the namespace, **all ports** (Spark uses random RPC/block-manager ports). Egress covered by allow-all. |
-| **R5** | DNS | Egress | Covered by allow-all egress. |
-| **R6** | External services | Egress | Covered by allow-all egress (Maven/PyPI/S3 can't be FQDN-matched in NetworkPolicy). |
+| **R1** | Monitoring | Ingress | Driver metrics are served on the UI port (4040, `/metrics/prometheus`), so the 4040 rule in the ingress blanket admits the monitoring stack. Executor/custom metric ports are not covered. |
+| **R2** | Gateway/router + clients | Ingress | Spark UI (**4040**) and Spark Connect gRPC (**15002**) from **any namespace** (`namespaceSelector: {}`) on the ingress blanket — so cross-namespace consumers (ingress router, monitoring, Connect clients such as workbenches) are not blocked. |
+| **R3** | API server | Egress | Covered by the egress allow-all policy. |
+| **R4** | Intra-component | Ingress + Egress | Driver/server ingress from any operand in the namespace (all ports); executor ingress from same-app pods (the per-app policy). Egress via the allow-all policy. |
+| **R5** | DNS | Egress | Covered by the egress allow-all policy. |
+| **R6** | External services | Egress | Covered by the egress allow-all policy (Maven/PyPI/S3 can't be FQDN-matched in NetworkPolicy). |
 
-> **Portability:** the operand policy uses no OpenShift-specific labels, so it works on upstream Kubernetes as well as OpenShift. Cross-namespace consumer access is handled by opening the two consumer ports (4040, 15002) to **all** namespaces rather than targeting a platform-specific tier — the generic alternative to OpenShift `policy-group` labels or configurable selectors. All *other* operand ports (executor shuffle/block-manager, Connect RPC 7078/7079) remain reachable only from Spark pods in the same namespace.
->
-> **Isolation trade-off:** because the policy is per-namespace (not per-app), Spark pods of different applications in the same namespace can reach each other. This is the accepted trade-off of the blanket model (ODH-ADR-Operator-0016 permits a label-based blanket policy).
+> **Portability:** no OpenShift-specific labels, so it works on upstream Kubernetes as well as OpenShift. Cross-namespace consumer access is handled by opening the two consumer ports (4040, 15002) to **all** namespaces rather than a platform-specific tier. All *other* ports (executor shuffle/block-manager, Connect RPC 7078/7079) stay reachable only from same-app / same-namespace Spark pods.
 
-### Policy (one per namespace)
+### Spark 4.2 interaction
+
+Spark 4.2's `NetworkPolicyFeatureStep` (SPARK-55653) makes `spark-submit` create a **per-app executor ingress** policy (`from: spark-app-selector=<appID>`), owned by the driver pod. If the operator's bundled Spark is bumped to 4.2+, both Spark's policy and ours would select the executor pods. Because NetworkPolicies are **additive**, a *blanket* executor ingress (from any same-namespace Spark pod) would **widen** — effectively nullify — Spark's same-app isolation.
+
+Keeping our executor ingress **per-app and identical to SPARK-55653** avoids this: the two policies express the same same-app rule, so their union is still same-app — redundant but not widening. The blanket policies deliberately exclude executors, so they never touch Spark's executor policy. (Spark 4.2's policy is **ingress-only** and does not grant executor egress; our shared egress policy still provides that, which matters under a default-deny-egress posture.)
+
+### Policies
 
 ```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: spark-operator-operands
-  namespace: <workload-namespace>
-  labels:
-    sparkoperator.k8s.io/created-by-spark-operator: "true"
-  # one non-controller ownerReference per SparkApplication/SparkConnect with
-  # operands in the namespace; kube GC deletes the policy when the last is gone
-  ownerReferences: [<SparkApplication / SparkConnect>, ...]
+# 1. spark-operator-operand-egress — allow-all egress for every operand (per namespace)
+spec:
+  podSelector: {matchLabels: {sparkoperator.k8s.io/launched-by-spark-operator: "true"}}
+  policyTypes: [Egress]
+  egress:
+    - {}
+---
+# 2. spark-operator-operand-ingress — driver + Connect server ingress (per namespace)
 spec:
   podSelector:
-    matchLabels:
-      sparkoperator.k8s.io/launched-by-spark-operator: "true"
-  policyTypes: [Ingress, Egress]
+    matchLabels: {sparkoperator.k8s.io/launched-by-spark-operator: "true"}
+    matchExpressions:
+      - {key: spark-role, operator: In, values: [driver, connect-server]}
+  policyTypes: [Ingress]
   ingress:
     # R4 — intra-Spark: any operand pod in the namespace, all ports
     - from:
-        - podSelector:
-            matchLabels: {sparkoperator.k8s.io/launched-by-spark-operator: "true"}
-    # R1/R2 — Spark UI + driver metrics (4040) and Spark Connect gRPC (15002)
-    #          from any namespace (empty namespaceSelector matches all)
+        - podSelector: {matchLabels: {sparkoperator.k8s.io/launched-by-spark-operator: "true"}}
+    # R1/R2 — Spark UI + metrics (4040) and Connect gRPC (15002) from any namespace
     - from:
         - namespaceSelector: {}
       ports:
         - {protocol: TCP, port: 4040}
         - {protocol: TCP, port: 15002}
-  egress:
-    # R3 (API server) + R5 (DNS) + R6 (external) — allow-all
-    - {}
+---
+# 3. <workload>-executor — per-app executor ingress (matches Spark 4.2 SPARK-55653)
+#    SparkApplication: groupLabel = spark-app-selector=<appID>
+#    SparkConnect:     groupLabel = sparkoperator.k8s.io/connect-name=<conn>
+spec:
+  podSelector:
+    matchLabels: {<groupLabel>: <value>, spark-role: executor}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {<groupLabel>: <value>}}
 ```
+
+All three carry one non-controller `ownerReference` per owning workload for GC.
 
 ### Lifecycle, cleanup & idempotency
 
-`networkpolicy.Ensure` is invoked on every reconcile (SparkApplication: on the Running-state pass; SparkConnect: each reconcile) via `controllerutil.CreateOrUpdate`, which **GETs first and only writes when something changed**:
+`EnsureForSparkApplication` / `EnsureForSparkConnect` run on every reconcile (SparkApplication: on the Running-state pass, once `app.Status.SparkApplicationID` is set; SparkConnect: each reconcile) via `controllerutil.CreateOrUpdate`, which **GETs first and only writes when something changed**:
 
 | Situation | Result |
 |-----------|--------|
-| First workload in the namespace | policy doesn't exist → one **Create** |
-| A new workload reconciles | policy exists but this workload isn't an owner yet → `SetOwnerReference` appends it → one **Update** |
-| Steady state (policy exists, workload already an owner, spec unchanged) | mutate yields an identical object → **no write** (one cached GET only) |
+| First workload in the namespace | policies don't exist → one **Create** each |
+| A new workload reconciles | shared policy exists but this workload isn't an owner yet → `SetOwnerReference` appends it → one **Update**; the workload's own `<workload>-executor` policy is created |
+| Steady state (policies exist, workload already an owner, spec unchanged) | mutate yields identical objects → **no write** (cached GETs only) |
 
-So the policy is **not** re-created on every pass. `SetOwnerReference` is idempotent (never duplicates an owner) and the spec is static, so re-running `Ensure` for an already-registered workload is a no-op.
+So the policies are **not** re-created on every pass. `SetOwnerReference` is idempotent (never duplicates an owner) and the specs are static, so re-running `Ensure…` for an already-registered workload is a no-op.
 
-**Cleanup is automatic — there is no explicit delete code.** Each SparkApplication / SparkConnect is recorded as a **non-controller owner reference** on the shared policy, and the Kubernetes garbage collector handles removal:
+**Cleanup is automatic — there is no explicit delete code.** Each SparkApplication / SparkConnect is recorded as a **non-controller owner reference** on the policies it touches, and the Kubernetes garbage collector handles removal:
 
-- When a workload is **deleted**, the GC removes its owner reference from the policy.
-- When the **last** owner reference is removed (the last Spark workload in the namespace is gone), the GC **deletes the policy**.
+- When a workload is **deleted**, the GC removes its owner reference from each policy.
+- The two **blanket** policies are deleted when the **last** workload in the namespace is gone; a **`<workload>-executor`** policy is deleted as soon as that single workload is gone.
 
 This satisfies "clean up when the last application is shut down" (ODH-ADR-Operator-0016) without the operator doing last-app detection. Notes:
-- Cleanup triggers on CR **deletion**, not completion — a `Completed` SparkApplication that still exists keeps its owner reference, so the policy persists (it may rerun).
+- Cleanup triggers on CR **deletion**, not completion — a `Completed` SparkApplication that still exists keeps its owner references, so the policies persist (it may rerun).
 - GC runs **independently of the operator**, so cleanup happens even if the operator is down when the last workload is deleted.
 
 **Edge cases (all self-healing):**
-- If the policy's last owner is removed at the same moment another workload is still starting (before it has added its own owner reference), GC may briefly delete the policy; the starting workload's next reconcile recreates it (closed on requeue).
-- If the policy is manually deleted while workloads still exist, the next reconcile recreates it.
+- If a blanket policy's last owner is removed at the same moment another workload is still starting (before it has added its own owner reference), GC may briefly delete it; the starting workload's next reconcile recreates it (closed on requeue).
+- If a policy is manually deleted while workloads still exist, the next reconcile recreates it.
 - GC is asynchronous, so there is a short delay between the last workload's deletion and the policy's removal.
 
 ### Packaging
 
-The policy is **created and maintained by the operator at runtime** (not a static manifest), via `internal/controller/networkpolicy`, **unconditionally** (no feature flag). The controller RBAC grants `networkpolicies` (get/list/watch/create/update/patch/delete) in both `config/rbac/role.yaml` and the Helm chart. Contrast with the **operator-pod** policies below, which are static overlay manifests.
+The policies are **created and maintained by the operator at runtime** (not static manifests), via `internal/controller/networkpolicy`, **unconditionally** (no feature flag). The controller RBAC grants `networkpolicies` (get/list/watch/create/update/patch/delete) in both `config/rbac/role.yaml` and the Helm chart. Contrast with the **operator-pod** policies below, which are static overlay manifests.
 
 ---
 

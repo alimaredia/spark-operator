@@ -236,8 +236,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (reconcile
 		return reconcile.Result{}, err
 	}
 
-	if err := networkpolicy.Ensure(ctx, r.client, r.scheme, conn, conn.Namespace); err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to ensure operand network policy: %w", err)
+	if err := networkpolicy.EnsureForSparkConnect(ctx, r.client, r.scheme, conn); err != nil {
+		return reconcile.Result{}, fmt.Errorf("failed to ensure operand network policies: %w", err)
 	}
 
 	if err := r.updateSparkConnectStatus(ctx, old, conn); err != nil {

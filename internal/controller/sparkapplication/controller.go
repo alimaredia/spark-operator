@@ -532,12 +532,12 @@ func (r *Reconciler) reconcileRunningSparkApplication(ctx context.Context, req c
 				return fmt.Errorf("failed to ensure driver PDB: %v", err)
 			}
 
-			// Ensure the blanket operand NetworkPolicy exists in the app's
-			// namespace. Idempotent; the policy is owner-referenced to the app so
-			// kube GC removes it once the last Spark workload in the namespace is
-			// gone.
-			if err := networkpolicy.Ensure(ctx, r.client, r.scheme, app, app.Namespace); err != nil {
-				return fmt.Errorf("failed to ensure operand network policy: %v", err)
+			// Ensure the operand NetworkPolicies (shared egress + driver ingress
+			// blanket, plus the per-app executor ingress policy). Idempotent; the
+			// policies are owner-referenced to the app so kube GC removes them once
+			// the last owner in the namespace is gone.
+			if err := networkpolicy.EnsureForSparkApplication(ctx, r.client, r.scheme, app, app.Status.SparkApplicationID); err != nil {
+				return fmt.Errorf("failed to ensure operand network policies: %v", err)
 			}
 
 			if err := r.updateSparkApplicationStatus(ctx, app); err != nil {

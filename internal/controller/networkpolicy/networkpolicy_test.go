@@ -50,29 +50,56 @@ func app(name, uid string) *v1beta2.SparkApplication {
 	}
 }
 
-func TestOperandPolicySpec(t *testing.T) {
-	spec := operandPolicySpec()
-
+func TestEgressSpecIsAllowAll(t *testing.T) {
+	spec := egressSpec()
 	if spec.PodSelector.MatchLabels[common.LabelLaunchedBySparkOperator] != "true" {
-		t.Errorf("podSelector = %+v, want launched-by-spark-operator=true", spec.PodSelector)
+		t.Errorf("egress podSelector = %+v, want launched-by-spark-operator=true", spec.PodSelector)
 	}
-	hasIngress, hasEgress := false, false
-	for _, pt := range spec.PolicyTypes {
-		hasIngress = hasIngress || pt == networkingv1.PolicyTypeIngress
-		hasEgress = hasEgress || pt == networkingv1.PolicyTypeEgress
+	if len(spec.PolicyTypes) != 1 || spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
+		t.Errorf("egress policyTypes = %v, want [Egress]", spec.PolicyTypes)
 	}
-	if !hasIngress || !hasEgress {
-		t.Errorf("policyTypes = %v, want both Ingress and Egress", spec.PolicyTypes)
+	if len(spec.Egress) != 1 || len(spec.Egress[0].To) != 0 || len(spec.Egress[0].Ports) != 0 {
+		t.Errorf("egress = %+v, want single allow-all rule", spec.Egress)
+	}
+}
+
+func TestNonExecutorIngressSpec(t *testing.T) {
+	spec := nonExecutorIngressSpec()
+
+	// Selects driver + connect-server, not executors.
+	if len(spec.PodSelector.MatchExpressions) != 1 {
+		t.Fatalf("podSelector matchExpressions = %+v, want one spark-role In rule", spec.PodSelector.MatchExpressions)
+	}
+	req := spec.PodSelector.MatchExpressions[0]
+	if req.Key != common.LabelSparkRole || req.Operator != metav1.LabelSelectorOpIn {
+		t.Errorf("podSelector expr = %+v", req)
+	}
+	wantRoles := map[string]bool{common.SparkRoleDriver: true, common.SparkRoleConnectServer: true}
+	for _, v := range req.Values {
+		if !wantRoles[v] {
+			t.Errorf("unexpected role %q in selector", v)
+		}
+	}
+	if len(req.Values) != 2 {
+		t.Errorf("roles = %v, want driver and connect-server", req.Values)
+	}
+
+	if len(spec.PolicyTypes) != 1 || spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
+		t.Errorf("policyTypes = %v, want [Ingress]", spec.PolicyTypes)
 	}
 	if len(spec.Ingress) != 2 {
 		t.Fatalf("ingress rules = %d, want 2", len(spec.Ingress))
 	}
-	// Rule 0: intra-Spark, all ports.
+	// Rule 0: intra-Spark, all ports, from any operand in the namespace.
 	if len(spec.Ingress[0].Ports) != 0 ||
 		spec.Ingress[0].From[0].PodSelector.MatchLabels[common.LabelLaunchedBySparkOperator] != "true" {
 		t.Errorf("intra-Spark rule = %+v", spec.Ingress[0])
 	}
-	// Rule 1: consumer ports (UI + Connect gRPC) from any namespace.
+	// Rule 1: consumer ports (4040, 15002) from any namespace.
+	peer := spec.Ingress[1].From[0]
+	if peer.NamespaceSelector == nil || len(peer.NamespaceSelector.MatchLabels) != 0 || peer.PodSelector != nil {
+		t.Errorf("consumer peer = %+v, want empty namespaceSelector (all namespaces)", peer)
+	}
 	ports := map[int]bool{}
 	for _, p := range spec.Ingress[1].Ports {
 		ports[p.Port.IntValue()] = true
@@ -80,51 +107,78 @@ func TestOperandPolicySpec(t *testing.T) {
 	if !ports[int(common.DefaultSparkWebUIPort)] || !ports[sparkConnectGRPCPort] {
 		t.Errorf("consumer ports = %v, want %d and %d", ports, common.DefaultSparkWebUIPort, sparkConnectGRPCPort)
 	}
-	// The consumer peer is an empty namespaceSelector (all namespaces), so
-	// cross-namespace consumers (router, monitoring, Connect clients) are allowed.
-	peer := spec.Ingress[1].From[0]
-	if peer.NamespaceSelector == nil || len(peer.NamespaceSelector.MatchLabels) != 0 || peer.PodSelector != nil {
-		t.Errorf("consumer peer = %+v, want empty namespaceSelector (all namespaces)", peer)
+}
+
+// TestExecutorIngressSpecMatchesSparkFeatureStep verifies the executor policy is
+// the SPARK-55653 shape: same-app ingress only, no egress, no port restriction.
+func TestExecutorIngressSpecMatchesSparkFeatureStep(t *testing.T) {
+	spec := executorIngressSpec(common.LabelSparkApplicationSelector, "spark-abc123")
+
+	if spec.PodSelector.MatchLabels[common.LabelSparkApplicationSelector] != "spark-abc123" ||
+		spec.PodSelector.MatchLabels[common.LabelSparkRole] != common.SparkRoleExecutor {
+		t.Errorf("podSelector = %+v, want spark-app-selector + spark-role=executor", spec.PodSelector)
 	}
-	// Egress allow-all: a single empty rule.
-	if len(spec.Egress) != 1 || len(spec.Egress[0].To) != 0 || len(spec.Egress[0].Ports) != 0 {
-		t.Errorf("egress = %+v, want single allow-all rule", spec.Egress)
+	if len(spec.PolicyTypes) != 1 || spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
+		t.Errorf("policyTypes = %v, want [Ingress] only (no Egress)", spec.PolicyTypes)
+	}
+	if len(spec.Egress) != 0 {
+		t.Errorf("egress = %+v, want none (ingress-only)", spec.Egress)
+	}
+	if len(spec.Ingress) != 1 || len(spec.Ingress[0].Ports) != 0 {
+		t.Fatalf("ingress = %+v, want one port-less rule", spec.Ingress)
+	}
+	if spec.Ingress[0].From[0].PodSelector.MatchLabels[common.LabelSparkApplicationSelector] != "spark-abc123" {
+		t.Errorf("ingress from = %+v, want same-app spark-app-selector", spec.Ingress[0].From)
 	}
 }
 
-func TestEnsureCreatesAndAccumulatesOwners(t *testing.T) {
+func TestEnsureForSparkApplicationCreatesPoliciesAndAccumulatesOwners(t *testing.T) {
 	scheme := newScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
-	key := client.ObjectKey{Name: OperandPolicyName, Namespace: "ns"}
 
-	// First workload creates the policy with one owner.
-	if err := Ensure(ctx, c, scheme, app("app1", "uid-1"), "ns"); err != nil {
+	// First app: creates the shared policies + its executor policy.
+	if err := EnsureForSparkApplication(ctx, c, scheme, app("app1", "uid-1"), "spark-app1"); err != nil {
 		t.Fatal(err)
 	}
-	np := &networkingv1.NetworkPolicy{}
-	if err := c.Get(ctx, key, np); err != nil {
-		t.Fatalf("policy not created: %v", err)
-	}
-	if len(np.OwnerReferences) != 1 {
-		t.Fatalf("owners = %d, want 1", len(np.OwnerReferences))
-	}
-
-	// Second workload is added as an additional owner.
-	if err := Ensure(ctx, c, scheme, app("app2", "uid-2"), "ns"); err != nil {
-		t.Fatal(err)
-	}
-	_ = c.Get(ctx, key, np)
-	if len(np.OwnerReferences) != 2 {
-		t.Fatalf("owners = %d, want 2", len(np.OwnerReferences))
+	for _, name := range []string{OperandEgressPolicyName, OperandIngressPolicyName, "app1" + executorPolicySuffix} {
+		np := &networkingv1.NetworkPolicy{}
+		if err := c.Get(ctx, client.ObjectKey{Name: name, Namespace: "ns"}, np); err != nil {
+			t.Fatalf("policy %s not created: %v", name, err)
+		}
+		if len(np.OwnerReferences) != 1 {
+			t.Errorf("policy %s owners = %d, want 1", name, len(np.OwnerReferences))
+		}
 	}
 
-	// Re-ensuring an existing owner is idempotent (no duplicate).
-	if err := Ensure(ctx, c, scheme, app("app1", "uid-1"), "ns"); err != nil {
+	// Second app: shares the blanket policies (2 owners) but gets its own executor policy.
+	if err := EnsureForSparkApplication(ctx, c, scheme, app("app2", "uid-2"), "spark-app2"); err != nil {
 		t.Fatal(err)
 	}
-	_ = c.Get(ctx, key, np)
-	if len(np.OwnerReferences) != 2 {
-		t.Fatalf("owners after re-ensure = %d, want 2", len(np.OwnerReferences))
+	shared := &networkingv1.NetworkPolicy{}
+	_ = c.Get(ctx, client.ObjectKey{Name: OperandEgressPolicyName, Namespace: "ns"}, shared)
+	if len(shared.OwnerReferences) != 2 {
+		t.Errorf("shared egress owners = %d, want 2", len(shared.OwnerReferences))
+	}
+	exec2 := &networkingv1.NetworkPolicy{}
+	if err := c.Get(ctx, client.ObjectKey{Name: "app2" + executorPolicySuffix, Namespace: "ns"}, exec2); err != nil {
+		t.Errorf("app2 executor policy not created: %v", err)
+	}
+}
+
+func TestEnsureForSparkApplicationSkipsExecutorPolicyWithoutAppID(t *testing.T) {
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	ctx := context.Background()
+
+	if err := EnsureForSparkApplication(ctx, c, scheme, app("app1", "uid-1"), ""); err != nil {
+		t.Fatal(err)
+	}
+	// Shared policies exist; executor policy is skipped until the appID is known.
+	if err := c.Get(ctx, client.ObjectKey{Name: OperandEgressPolicyName, Namespace: "ns"}, &networkingv1.NetworkPolicy{}); err != nil {
+		t.Errorf("shared egress should exist: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: "app1" + executorPolicySuffix, Namespace: "ns"}, &networkingv1.NetworkPolicy{}); err == nil {
+		t.Error("executor policy should not be created without an appID")
 	}
 }
