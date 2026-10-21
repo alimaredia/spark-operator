@@ -89,6 +89,7 @@ The operator creates operand NetworkPolicies via `internal/controller/networkpol
 | `spark-operator-operand-egress` | per namespace (blanket) | all operands (`launched-by-spark-operator`) | allow-all **egress** |
 | `spark-operator-operand-ingress` | per namespace (blanket) | **non-executor** operands (`spark-role in {driver, connect-server}`) | intra-Spark ingress + Spark UI/metrics (4040) and Connect gRPC (15002) from any namespace |
 | `<workload>-executor` | **per workload** | that workload's executors | same-app ingress only — **identical to Spark's `NetworkPolicyFeatureStep` (SPARK-55653)** |
+| `<app>-driver-ui` | **per app**, only when `spark.ui.port` ≠ 4040 | that app's driver | admits the custom Spark UI/metrics port from any namespace (the blanket ingress only admits the default 4040) |
 
 - **Executor ingress is per-app**, keyed on `spark-app-selector=<appID>` for SparkApplications (exactly Spark 4.2's shape) and on `connect-name=<conn>` for SparkConnect (same pod set as the Connect server's `spark-app-selector`). Executors are **not** selected by the blanket ingress policy.
 - **Scope:** covers SparkApplications created by a ScheduledSparkApplication too, since those reconcile through the SparkApplication controller.
@@ -98,7 +99,7 @@ The operator creates operand NetworkPolicies via `internal/controller/networkpol
 
 | R | Dimension | Direction | How addressed |
 |---|-----------|-----------|---------------|
-| **R1** | Monitoring | Ingress | Driver metrics are served on the UI port (4040, `/metrics/prometheus`), so the 4040 rule in the ingress blanket admits the monitoring stack. Executor/custom metric ports are not covered. |
+| **R1** | Monitoring | Ingress | Driver metrics are served on the UI port (4040, `/metrics/prometheus`), so the 4040 rule in the ingress blanket admits the monitoring stack. If an app sets a non-default `spark.ui.port`, the per-app `<app>-driver-ui` policy admits that port (UI + metrics ride the same port). A dedicated metrics-exporter port is not covered — document "bring your own policy" for that case. |
 | **R2** | Gateway/router + clients | Ingress | Spark UI (**4040**) and Spark Connect gRPC (**15002**) from **any namespace** (`namespaceSelector: {}`) on the ingress blanket — so cross-namespace consumers (ingress router, monitoring, Connect clients such as workbenches) are not blocked. |
 | **R3** | API server | Egress | Covered by the egress allow-all policy. |
 | **R4** | Intra-component | Ingress + Egress | Driver/server ingress from any operand in the namespace (all ports); executor ingress from same-app pods (the per-app policy). Egress via the allow-all policy. |
@@ -151,9 +152,21 @@ spec:
   ingress:
     - from:
         - podSelector: {matchLabels: {<groupLabel>: <value>}}
+---
+# 4. <app>-driver-ui — created ONLY when spark.ui.port != 4040 (SparkApplication)
+#    admits the custom UI/metrics port that the blanket ingress (4040) misses
+spec:
+  podSelector:
+    matchLabels: {sparkoperator.k8s.io/app-name: <app>, spark-role: driver}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - {protocol: TCP, port: <spark.ui.port>}
 ```
 
-All three carry one non-controller `ownerReference` per owning workload for GC.
+Each policy carries one non-controller `ownerReference` per owning workload for GC.
 
 ### Lifecycle, cleanup & idempotency
 
@@ -184,6 +197,33 @@ This satisfies "clean up when the last application is shut down" (ODH-ADR-Operat
 ### Packaging
 
 The policies are **created and maintained by the operator at runtime** (not static manifests), via `internal/controller/networkpolicy`, **unconditionally** (no feature flag). The controller RBAC grants `networkpolicies` (get/list/watch/create/update/patch/delete) in both `config/rbac/role.yaml` and the Helm chart. Contrast with the **operator-pod** policies below, which are static overlay manifests.
+
+### Extending the policies (bring-your-own)
+
+To allow additional ingress (e.g. a dedicated metrics-exporter port, a Spark Thrift/JDBC port, or a custom app port, reached from another namespace), **do not edit the operator-managed policies** — they are reconciled with `CreateOrUpdate`, so manual edits are reverted on the next pass. Instead, create a **separate** NetworkPolicy in the workload namespace. NetworkPolicies are **additive** (a pod's allowed traffic is the union of all policies selecting it, with no deny), so a sibling policy can only *add* permissiveness, and the operator leaves it alone.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: my-spark-driver-extra        # any name not used by the operator
+  namespace: <workload-namespace>
+spec:
+  podSelector:
+    matchLabels:
+      sparkoperator.k8s.io/app-name: <app>   # or spark-role: driver / connect-server,
+      spark-role: driver                      # or launched-by-spark-operator: "true"
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: my-clients}}
+      ports:
+        - {protocol: TCP, port: 10000}
+```
+
+- Apply it any time (before or after the workload exists); the CNI re-evaluates continuously.
+- The operator does not garbage-collect it — manage its lifecycle yourself, or add an `ownerReference` to the SparkApplication/SparkConnect so kube GC removes it with the workload.
+- This only **adds** allows; it cannot make the operator's policies more restrictive (NetworkPolicy has no deny). There is no `spec.networkPolicy` CR field today, so a sibling policy is the supported customization point.
 
 ---
 

@@ -53,6 +53,10 @@ const (
 
 	// executorPolicySuffix is appended to the workload name for its executor policy.
 	executorPolicySuffix = "-executor"
+
+	// driverUIPolicySuffix is appended to the app name for the per-app driver UI
+	// policy created only when the app overrides spark.ui.port.
+	driverUIPolicySuffix = "-driver-ui"
 )
 
 // EnsureForSparkApplication converges the operand NetworkPolicies for a
@@ -63,9 +67,20 @@ const (
 // executor policy is skipped and created on a later reconcile. Covers
 // SparkApplications created by a ScheduledSparkApplication too, since those
 // reconcile through the SparkApplication controller.
-func EnsureForSparkApplication(ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object, appID string) error {
+//
+// uiTargetPort is the driver's actual Spark UI port (from spark.ui.port). The
+// shared ingress blanket only admits the default 4040, so when the app overrides
+// the port a small per-app policy is created to admit the custom UI/metrics port.
+func EnsureForSparkApplication(ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object, appID string, uiTargetPort int32) error {
 	if err := ensureSharedPolicies(ctx, c, scheme, owner); err != nil {
 		return err
+	}
+	// Custom UI port override: the blanket ingress admits only DefaultSparkWebUIPort.
+	if uiTargetPort != common.DefaultSparkWebUIPort {
+		if err := ensurePolicy(ctx, c, scheme, owner, owner.GetName()+driverUIPolicySuffix,
+			driverUIIngressSpec(owner.GetName(), uiTargetPort)); err != nil {
+			return err
+		}
 	}
 	if appID == "" {
 		return nil
@@ -183,6 +198,30 @@ func executorIngressSpec(groupLabelKey, groupLabelValue string) networkingv1.Net
 				From: []networkingv1.NetworkPolicyPeer{
 					{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{groupLabelKey: groupLabelValue}}},
 				},
+			},
+		},
+	}
+}
+
+// driverUIIngressSpec admits a SparkApplication driver's non-default Spark UI
+// port (which also serves driver metrics) from any namespace, mirroring the
+// blanket ingress rule for the default 4040. Selects the app's driver by the
+// operator-owned app-name label.
+func driverUIIngressSpec(appName string, uiPort int32) networkingv1.NetworkPolicySpec {
+	tcp := corev1.ProtocolTCP
+	port := intstr.FromInt(int(uiPort))
+	return networkingv1.NetworkPolicySpec{
+		PodSelector: metav1.LabelSelector{
+			MatchLabels: map[string]string{
+				common.LabelSparkAppName: appName,
+				common.LabelSparkRole:    common.SparkRoleDriver,
+			},
+		},
+		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+		Ingress: []networkingv1.NetworkPolicyIngressRule{
+			{
+				From:  []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{}}},
+				Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &port}},
 			},
 		},
 	}
