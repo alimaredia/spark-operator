@@ -53,9 +53,6 @@ const (
 
 	// executorPolicySuffix is appended to the workload name for its executor policy.
 	executorPolicySuffix = "-executor"
-
-	// sparkConnectGRPCPort is the Spark Connect gRPC server port.
-	sparkConnectGRPCPort = 15002
 )
 
 // EnsureForSparkApplication converges the operand NetworkPolicies for a
@@ -139,7 +136,7 @@ func egressSpec() networkingv1.NetworkPolicySpec {
 func nonExecutorIngressSpec() networkingv1.NetworkPolicySpec {
 	tcp := corev1.ProtocolTCP
 	uiPort := intstr.FromInt(int(common.DefaultSparkWebUIPort))
-	grpcPort := intstr.FromInt(sparkConnectGRPCPort)
+	grpcPort := intstr.FromInt(common.SparkConnectServerPort)
 	return networkingv1.NetworkPolicySpec{
 		PodSelector: metav1.LabelSelector{
 			MatchLabels: map[string]string{common.LabelLaunchedBySparkOperator: "true"},

@@ -363,6 +363,52 @@ tests:
             verbs:
               - watch
 
+  - it: Should grant networkpolicies get/list/watch/create/update/patch/delete in ClusterRole
+    set:
+      spark:
+        jobNamespaces:
+          - ""
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - networking.k8s.io
+            resources:
+              - networkpolicies
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+              - update
+              - patch
+              - delete
+
+  - it: Should grant networkpolicies get/list/watch/create/update/patch/delete in namespace Role
+    set:
+      spark:
+        jobNamespaces:
+          - default
+    documentIndex: 4
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - networking.k8s.io
+            resources:
+              - networkpolicies
+            verbs:
+              - get
+              - list
+              - watch
+              - create
+              - update
+              - patch
+              - delete
+
   - it: Should grant sparkapplications only get/list/watch/create/delete in ClusterRole
     set:
       spark:

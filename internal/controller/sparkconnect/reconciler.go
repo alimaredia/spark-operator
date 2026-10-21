@@ -52,7 +52,7 @@ import (
 const (
 	ExecutorPodTemplateFileName = "executor-pod-template.yaml"
 
-	sparkConnectServerPort = 15002
+	sparkConnectServerPort = common.SparkConnectServerPort
 )
 
 // Options defines the options of SparkConnect reconciler.

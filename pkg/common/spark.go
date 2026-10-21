@@ -382,6 +382,9 @@ const (
 	DefaultSparkWebUIPort int32 = 4040
 
 	DefaultSparkWebUIPortName = "spark-driver-ui-port"
+
+	// SparkConnectServerPort is the Spark Connect gRPC server port.
+	SparkConnectServerPort = 15002
 )
 
 // https://spark.apache.org/docs/latest/configuration.html

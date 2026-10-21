@@ -279,7 +279,7 @@ resources:
   - ../../default
   - ../../spark-rbac
   - ../../prometheus
-  - networkpolicy.yaml            # operand default-deny / intra-spark ingress
+  - networkpolicy.yaml            # spark-operator-allow-internal (operator-namespace ingress allow)
   - networkpolicy-metrics.yaml    # R1 monitoring + health
   - networkpolicy-egress.yaml     # R3/R5/R6 allow-all egress
   - networkpolicy-webhook.yaml    # R3 admission 9443

@@ -18,6 +18,7 @@ package networkpolicy
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -27,7 +28,9 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/kubeflow/spark-operator/v2/api/v1alpha1"
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
 	"github.com/kubeflow/spark-operator/v2/pkg/common"
 )
@@ -41,11 +44,20 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	if err := v1beta2.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	return scheme
 }
 
 func app(name, uid string) *v1beta2.SparkApplication {
 	return &v1beta2.SparkApplication{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: types.UID(uid)},
+	}
+}
+
+func conn(name, uid string) *v1alpha1.SparkConnect {
+	return &v1alpha1.SparkConnect{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: types.UID(uid)},
 	}
 }
@@ -104,8 +116,8 @@ func TestNonExecutorIngressSpec(t *testing.T) {
 	for _, p := range spec.Ingress[1].Ports {
 		ports[p.Port.IntValue()] = true
 	}
-	if !ports[int(common.DefaultSparkWebUIPort)] || !ports[sparkConnectGRPCPort] {
-		t.Errorf("consumer ports = %v, want %d and %d", ports, common.DefaultSparkWebUIPort, sparkConnectGRPCPort)
+	if !ports[int(common.DefaultSparkWebUIPort)] || !ports[common.SparkConnectServerPort] {
+		t.Errorf("consumer ports = %v, want %d and %d", ports, common.DefaultSparkWebUIPort, common.SparkConnectServerPort)
 	}
 }
 
@@ -180,5 +192,64 @@ func TestEnsureForSparkApplicationSkipsExecutorPolicyWithoutAppID(t *testing.T) 
 	}
 	if err := c.Get(ctx, client.ObjectKey{Name: "app1" + executorPolicySuffix, Namespace: "ns"}, &networkingv1.NetworkPolicy{}); err == nil {
 		t.Error("executor policy should not be created without an appID")
+	}
+}
+
+func TestEnsureForSparkConnectCreatesPolicies(t *testing.T) {
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	ctx := context.Background()
+
+	if err := EnsureForSparkConnect(ctx, c, scheme, conn("conn1", "uid-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Shared blanket policies + the per-Connect executor policy are created, each owned by the SparkConnect.
+	for _, name := range []string{OperandEgressPolicyName, OperandIngressPolicyName, "conn1" + executorPolicySuffix} {
+		np := &networkingv1.NetworkPolicy{}
+		if err := c.Get(ctx, client.ObjectKey{Name: name, Namespace: "ns"}, np); err != nil {
+			t.Fatalf("policy %s not created: %v", name, err)
+		}
+		if len(np.OwnerReferences) != 1 || np.OwnerReferences[0].Kind != "SparkConnect" {
+			t.Errorf("policy %s owners = %+v, want one SparkConnect owner", name, np.OwnerReferences)
+		}
+	}
+
+	// The executor policy is keyed on connect-name (not spark-app-selector).
+	exec := &networkingv1.NetworkPolicy{}
+	_ = c.Get(ctx, client.ObjectKey{Name: "conn1" + executorPolicySuffix, Namespace: "ns"}, exec)
+	if exec.Spec.PodSelector.MatchLabels[common.LabelSparkConnectName] != "conn1" ||
+		exec.Spec.PodSelector.MatchLabels[common.LabelSparkRole] != common.SparkRoleExecutor {
+		t.Errorf("executor podSelector = %+v, want connect-name=conn1 + spark-role=executor", exec.Spec.PodSelector)
+	}
+	if exec.Spec.Ingress[0].From[0].PodSelector.MatchLabels[common.LabelSparkConnectName] != "conn1" {
+		t.Errorf("executor ingress from = %+v, want connect-name=conn1", exec.Spec.Ingress[0].From)
+	}
+}
+
+// failingCreateClient returns a client whose Create always fails, to exercise
+// the error-return paths.
+func failingCreateClient(t *testing.T, scheme *runtime.Scheme) client.Client {
+	t.Helper()
+	return fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.CreateOption) error {
+			return errors.New("boom")
+		},
+	}).Build()
+}
+
+func TestEnsureForSparkApplicationReturnsErrorOnFailure(t *testing.T) {
+	scheme := newScheme(t)
+	c := failingCreateClient(t, scheme)
+	if err := EnsureForSparkApplication(context.Background(), c, scheme, app("app1", "uid-1"), "spark-app1"); err == nil {
+		t.Fatal("expected an error when policy creation fails")
+	}
+}
+
+func TestEnsureForSparkConnectReturnsErrorOnFailure(t *testing.T) {
+	scheme := newScheme(t)
+	c := failingCreateClient(t, scheme)
+	if err := EnsureForSparkConnect(context.Background(), c, scheme, conn("conn1", "uid-1")); err == nil {
+		t.Fatal("expected an error when policy creation fails")
 	}
 }
