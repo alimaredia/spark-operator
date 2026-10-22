@@ -17,27 +17,31 @@ limitations under the License.
 // Package networkpolicy manages the NetworkPolicies created for Spark operand
 // pods (driver, executor, and Spark Connect server/executor).
 //
-// Two policies are shared per namespace (one object each, selected by label):
-//   - an egress allow-all policy covering every operand pod, and
-//   - an ingress policy covering the non-executor pods (driver, Connect server)
-//     for intra-Spark traffic and the Spark UI / Connect gRPC consumer ports.
+// The operator ships only the allows required for a Spark job to run:
+//   - a per-namespace egress allow-all policy covering every operand pod, and
+//   - a per-namespace ingress policy covering the non-executor pods (driver,
+//     Connect server) for intra-Spark traffic (executors reaching the driver /
+//     server on Spark's random RPC/block-manager ports), and
+//   - a per-workload executor ingress policy restricting executor ingress to
+//     pods of the same application - identical to Spark's NetworkPolicyFeatureStep
+//     (SPARK-55653), so when Spark 4.2+ creates its own executor policy the two
+//     are the same same-app rule and do not additively widen each other.
 //
-// Executor ingress is handled by a per-workload policy that matches Spark's
-// NetworkPolicyFeatureStep (SPARK-55653): executor ingress is restricted to
-// pods of the same application. Keeping executors on a per-app ingress policy
-// (rather than the namespace blanket) means that when Spark 4.2+ creates its own
-// executor policy, the two are identical same-app rules - so they do not
-// additively widen each other's isolation.
+// Consumer-facing ingress (Spark UI, Spark Connect gRPC, metrics scraping from
+// other namespaces) is intentionally NOT opened by the operator: selecting the
+// pods with the policies above denies all other ingress by default, and cluster
+// admins / users expose those ports with their own additive NetworkPolicy in the
+// workload namespace (the same way they provision RBAC there). kubectl
+// port-forward (node-sourced) and same-namespace access keep working without any
+// extra policy.
 package networkpolicy
 
 import (
 	"context"
 
-	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -53,10 +57,6 @@ const (
 
 	// executorPolicySuffix is appended to the workload name for its executor policy.
 	executorPolicySuffix = "-executor"
-
-	// driverUIPolicySuffix is appended to the app name for the per-app driver UI
-	// policy created only when the app overrides spark.ui.port.
-	driverUIPolicySuffix = "-driver-ui"
 )
 
 // EnsureForSparkApplication converges the operand NetworkPolicies for a
@@ -67,20 +67,9 @@ const (
 // executor policy is skipped and created on a later reconcile. Covers
 // SparkApplications created by a ScheduledSparkApplication too, since those
 // reconcile through the SparkApplication controller.
-//
-// uiTargetPort is the driver's actual Spark UI port (from spark.ui.port). The
-// shared ingress blanket only admits the default 4040, so when the app overrides
-// the port a small per-app policy is created to admit the custom UI/metrics port.
-func EnsureForSparkApplication(ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object, appID string, uiTargetPort int32) error {
+func EnsureForSparkApplication(ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object, appID string) error {
 	if err := ensureSharedPolicies(ctx, c, scheme, owner); err != nil {
 		return err
-	}
-	// Custom UI port override: the blanket ingress admits only DefaultSparkWebUIPort.
-	if uiTargetPort != common.DefaultSparkWebUIPort {
-		if err := ensurePolicy(ctx, c, scheme, owner, owner.GetName()+driverUIPolicySuffix,
-			driverUIIngressSpec(owner.GetName(), uiTargetPort)); err != nil {
-			return err
-		}
 	}
 	if appID == "" {
 		return nil
@@ -143,15 +132,13 @@ func egressSpec() networkingv1.NetworkPolicySpec {
 }
 
 // nonExecutorIngressSpec: ingress for the driver and Connect server pods -
-// intra-Spark traffic from any operand in the namespace (so executors can reach
-// them, on Spark's random RPC/block-manager ports), plus the Spark UI (4040,
-// which also serves driver metrics) and Spark Connect gRPC (15002) from any
-// namespace. Executors are intentionally excluded - their ingress is the per-app
-// policy from executorIngressSpec.
+// intra-Spark traffic from any operand pod in the namespace (so executors can
+// reach them on Spark's random RPC/block-manager ports), all ports. Consumer
+// ports (UI, Connect gRPC, metrics) are intentionally not opened here; selecting
+// the pods denies all other ingress by default, and those are exposed by a
+// user-managed additive policy. Executors are excluded - their ingress is the
+// per-app policy from executorIngressSpec.
 func nonExecutorIngressSpec() networkingv1.NetworkPolicySpec {
-	tcp := corev1.ProtocolTCP
-	uiPort := intstr.FromInt(int(common.DefaultSparkWebUIPort))
-	grpcPort := intstr.FromInt(common.SparkConnectServerPort)
 	return networkingv1.NetworkPolicySpec{
 		PodSelector: metav1.LabelSelector{
 			MatchLabels: map[string]string{common.LabelLaunchedBySparkOperator: "true"},
@@ -166,13 +153,6 @@ func nonExecutorIngressSpec() networkingv1.NetworkPolicySpec {
 			{
 				From: []networkingv1.NetworkPolicyPeer{
 					{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{common.LabelLaunchedBySparkOperator: "true"}}},
-				},
-			},
-			{
-				From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{}}},
-				Ports: []networkingv1.NetworkPolicyPort{
-					{Protocol: &tcp, Port: &uiPort},
-					{Protocol: &tcp, Port: &grpcPort},
 				},
 			},
 		},
@@ -198,30 +178,6 @@ func executorIngressSpec(groupLabelKey, groupLabelValue string) networkingv1.Net
 				From: []networkingv1.NetworkPolicyPeer{
 					{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{groupLabelKey: groupLabelValue}}},
 				},
-			},
-		},
-	}
-}
-
-// driverUIIngressSpec admits a SparkApplication driver's non-default Spark UI
-// port (which also serves driver metrics) from any namespace, mirroring the
-// blanket ingress rule for the default 4040. Selects the app's driver by the
-// operator-owned app-name label.
-func driverUIIngressSpec(appName string, uiPort int32) networkingv1.NetworkPolicySpec {
-	tcp := corev1.ProtocolTCP
-	port := intstr.FromInt(int(uiPort))
-	return networkingv1.NetworkPolicySpec{
-		PodSelector: metav1.LabelSelector{
-			MatchLabels: map[string]string{
-				common.LabelSparkAppName: appName,
-				common.LabelSparkRole:    common.SparkRoleDriver,
-			},
-		},
-		PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
-		Ingress: []networkingv1.NetworkPolicyIngressRule{
-			{
-				From:  []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{}}},
-				Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &port}},
 			},
 		},
 	}

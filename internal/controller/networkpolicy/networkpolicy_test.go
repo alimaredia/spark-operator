@@ -99,25 +99,19 @@ func TestNonExecutorIngressSpec(t *testing.T) {
 	if len(spec.PolicyTypes) != 1 || spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
 		t.Errorf("policyTypes = %v, want [Ingress]", spec.PolicyTypes)
 	}
-	if len(spec.Ingress) != 2 {
-		t.Fatalf("ingress rules = %d, want 2", len(spec.Ingress))
+	// Only the intra-Spark rule: all ports, from any operand in the namespace.
+	// No consumer-port rule (UI/gRPC are user-managed).
+	if len(spec.Ingress) != 1 {
+		t.Fatalf("ingress rules = %d, want 1 (intra-Spark only)", len(spec.Ingress))
 	}
-	// Rule 0: intra-Spark, all ports, from any operand in the namespace.
 	if len(spec.Ingress[0].Ports) != 0 ||
 		spec.Ingress[0].From[0].PodSelector.MatchLabels[common.LabelLaunchedBySparkOperator] != "true" {
 		t.Errorf("intra-Spark rule = %+v", spec.Ingress[0])
 	}
-	// Rule 1: consumer ports (4040, 15002) from any namespace.
-	peer := spec.Ingress[1].From[0]
-	if peer.NamespaceSelector == nil || len(peer.NamespaceSelector.MatchLabels) != 0 || peer.PodSelector != nil {
-		t.Errorf("consumer peer = %+v, want empty namespaceSelector (all namespaces)", peer)
-	}
-	ports := map[int]bool{}
-	for _, p := range spec.Ingress[1].Ports {
-		ports[p.Port.IntValue()] = true
-	}
-	if !ports[int(common.DefaultSparkWebUIPort)] || !ports[common.SparkConnectServerPort] {
-		t.Errorf("consumer ports = %v, want %d and %d", ports, common.DefaultSparkWebUIPort, common.SparkConnectServerPort)
+	for _, peer := range spec.Ingress[0].From {
+		if peer.NamespaceSelector != nil {
+			t.Errorf("ingress must not admit cross-namespace peers, got: %+v", peer)
+		}
 	}
 }
 
@@ -150,7 +144,7 @@ func TestEnsureForSparkApplicationCreatesPoliciesAndAccumulatesOwners(t *testing
 	ctx := context.Background()
 
 	// First app: creates the shared policies + its executor policy.
-	if err := EnsureForSparkApplication(ctx, c, scheme, app("app1", "uid-1"), "spark-app1", common.DefaultSparkWebUIPort); err != nil {
+	if err := EnsureForSparkApplication(ctx, c, scheme, app("app1", "uid-1"), "spark-app1"); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{OperandEgressPolicyName, OperandIngressPolicyName, "app1" + executorPolicySuffix} {
@@ -164,7 +158,7 @@ func TestEnsureForSparkApplicationCreatesPoliciesAndAccumulatesOwners(t *testing
 	}
 
 	// Second app: shares the blanket policies (2 owners) but gets its own executor policy.
-	if err := EnsureForSparkApplication(ctx, c, scheme, app("app2", "uid-2"), "spark-app2", common.DefaultSparkWebUIPort); err != nil {
+	if err := EnsureForSparkApplication(ctx, c, scheme, app("app2", "uid-2"), "spark-app2"); err != nil {
 		t.Fatal(err)
 	}
 	shared := &networkingv1.NetworkPolicy{}
@@ -183,7 +177,7 @@ func TestEnsureForSparkApplicationSkipsExecutorPolicyWithoutAppID(t *testing.T) 
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
 
-	if err := EnsureForSparkApplication(ctx, c, scheme, app("app1", "uid-1"), "", common.DefaultSparkWebUIPort); err != nil {
+	if err := EnsureForSparkApplication(ctx, c, scheme, app("app1", "uid-1"), ""); err != nil {
 		t.Fatal(err)
 	}
 	// Shared policies exist; executor policy is skipped until the appID is known.
@@ -241,7 +235,7 @@ func failingCreateClient(t *testing.T, scheme *runtime.Scheme) client.Client {
 func TestEnsureForSparkApplicationReturnsErrorOnFailure(t *testing.T) {
 	scheme := newScheme(t)
 	c := failingCreateClient(t, scheme)
-	if err := EnsureForSparkApplication(context.Background(), c, scheme, app("app1", "uid-1"), "spark-app1", common.DefaultSparkWebUIPort); err == nil {
+	if err := EnsureForSparkApplication(context.Background(), c, scheme, app("app1", "uid-1"), "spark-app1"); err == nil {
 		t.Fatal("expected an error when policy creation fails")
 	}
 }
@@ -251,60 +245,5 @@ func TestEnsureForSparkConnectReturnsErrorOnFailure(t *testing.T) {
 	c := failingCreateClient(t, scheme)
 	if err := EnsureForSparkConnect(context.Background(), c, scheme, conn("conn1", "uid-1")); err == nil {
 		t.Fatal("expected an error when policy creation fails")
-	}
-}
-
-func TestEnsureForSparkApplicationDriverUIPortOverride(t *testing.T) {
-	scheme := newScheme(t)
-	ctx := context.Background()
-	driverUIKey := func(name string) client.ObjectKey {
-		return client.ObjectKey{Name: name + driverUIPolicySuffix, Namespace: "ns"}
-	}
-
-	// Default UI port: no driver-ui override policy.
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	if err := EnsureForSparkApplication(ctx, c, scheme, app("app1", "uid-1"), "spark-app1", common.DefaultSparkWebUIPort); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Get(ctx, driverUIKey("app1"), &networkingv1.NetworkPolicy{}); err == nil {
-		t.Error("driver-ui policy should not be created for the default UI port")
-	}
-
-	// Custom UI port: a driver-ui override policy admits that port from any namespace.
-	c = fake.NewClientBuilder().WithScheme(scheme).Build()
-	if err := EnsureForSparkApplication(ctx, c, scheme, app("app2", "uid-2"), "spark-app2", 8080); err != nil {
-		t.Fatal(err)
-	}
-	np := &networkingv1.NetworkPolicy{}
-	if err := c.Get(ctx, driverUIKey("app2"), np); err != nil {
-		t.Fatalf("driver-ui policy not created for custom port: %v", err)
-	}
-	if np.Spec.PodSelector.MatchLabels[common.LabelSparkAppName] != "app2" ||
-		np.Spec.PodSelector.MatchLabels[common.LabelSparkRole] != common.SparkRoleDriver {
-		t.Errorf("driver-ui podSelector = %+v, want app-name=app2 + spark-role=driver", np.Spec.PodSelector)
-	}
-	if len(np.Spec.Ingress) != 1 || len(np.Spec.Ingress[0].Ports) != 1 ||
-		np.Spec.Ingress[0].Ports[0].Port.IntValue() != 8080 {
-		t.Errorf("driver-ui ingress = %+v, want a single rule on port 8080", np.Spec.Ingress)
-	}
-	if np.Spec.Ingress[0].From[0].NamespaceSelector == nil {
-		t.Errorf("driver-ui from = %+v, want all-namespaces", np.Spec.Ingress[0].From)
-	}
-}
-
-func TestEnsureForSparkApplicationDriverUIPortOverrideError(t *testing.T) {
-	scheme := newScheme(t)
-	// Fail Create only for the driver-ui policy, so the shared policies succeed
-	// and we exercise the override's error-return path.
-	c := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
-		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-			if obj.GetName() == "app1"+driverUIPolicySuffix {
-				return errors.New("boom")
-			}
-			return cl.Create(ctx, obj, opts...)
-		},
-	}).Build()
-	if err := EnsureForSparkApplication(context.Background(), c, scheme, app("app1", "uid-1"), "spark-app1", 8080); err == nil {
-		t.Fatal("expected an error when the driver-ui policy creation fails")
 	}
 }

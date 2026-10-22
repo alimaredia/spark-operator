@@ -27,6 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -85,6 +86,9 @@ var _ = Describe("Spark UI", func() {
 				MountPath: "/opt/spark/scripts",
 			})
 
+			By("Creating the consumer NetworkPolicy to expose the Spark UI (namespace enablement)")
+			applyConsumerNetworkPolicy(ctx, app.Namespace)
+
 			By("Creating SparkApplication")
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		})
@@ -97,6 +101,10 @@ var _ = Describe("Spark UI", func() {
 			}
 			By("Deleting the script ConfigMap")
 			_ = k8sClient.Delete(ctx, scriptConfigMap)
+			By("Deleting the consumer NetworkPolicy")
+			_ = k8sClient.Delete(ctx, &networkingv1.NetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: consumerNetworkPolicyName, Namespace: app.Namespace},
+			})
 		})
 
 		It("Should create a UI service and serve the Spark web UI", func() {

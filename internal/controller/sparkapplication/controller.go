@@ -533,15 +533,11 @@ func (r *Reconciler) reconcileRunningSparkApplication(ctx context.Context, req c
 			}
 
 			// Ensure the operand NetworkPolicies (shared egress + driver ingress
-			// blanket, the per-app executor ingress policy, and a per-app driver UI
-			// policy when spark.ui.port is non-default). Idempotent; the policies are
+			// blanket + per-app executor ingress). Idempotent; the policies are
 			// owner-referenced to the app so kube GC removes them once the last owner
-			// in the namespace is gone.
-			uiTargetPort, err := getWebUITargetPort(app)
-			if err != nil {
-				return fmt.Errorf("failed to determine Spark UI port: %v", err)
-			}
-			if err := networkpolicy.EnsureForSparkApplication(ctx, r.client, r.scheme, app, app.Status.SparkApplicationID, uiTargetPort); err != nil {
+			// in the namespace is gone. Consumer ingress (UI/metrics/gRPC) is left to
+			// a user-managed additive policy.
+			if err := networkpolicy.EnsureForSparkApplication(ctx, r.client, r.scheme, app, app.Status.SparkApplicationID); err != nil {
 				return fmt.Errorf("failed to ensure operand network policies: %v", err)
 			}
 

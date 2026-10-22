@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
@@ -61,6 +62,9 @@ var _ = Describe("SparkConnect Query", func() {
 			Expect(decoder.Decode(conn)).NotTo(HaveOccurred())
 			conn.Name = "spark-connect-query"
 
+			By("Creating the consumer NetworkPolicy to expose the Connect gRPC port (namespace enablement)")
+			applyConsumerNetworkPolicy(ctx, conn.Namespace)
+
 			By("Creating SparkConnect")
 			Expect(k8sClient.Create(ctx, conn)).To(Succeed())
 		})
@@ -71,6 +75,10 @@ var _ = Describe("SparkConnect Query", func() {
 				By("Deleting SparkConnect")
 				Expect(k8sClient.Delete(ctx, conn)).To(Succeed())
 			}
+			By("Deleting the consumer NetworkPolicy")
+			_ = k8sClient.Delete(ctx, &networkingv1.NetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: consumerNetworkPolicyName, Namespace: conn.Namespace},
+			})
 		})
 
 		It("Should execute a Scala query through the Spark Connect endpoint", func() {
