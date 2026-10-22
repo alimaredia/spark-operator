@@ -38,11 +38,9 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
@@ -56,7 +54,6 @@ import (
 
 	"github.com/kubeflow/spark-operator/v2/api/v1alpha1"
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
-	"github.com/kubeflow/spark-operator/v2/pkg/common"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -433,49 +430,4 @@ func loadSparkPi(name string) *v1beta2.SparkApplication {
 
 func loadSparkPiPython(name string) *v1beta2.SparkApplication {
 	return loadSparkApplication(filepath.Join("..", "..", "examples", "spark-pi-python.yaml"), name)
-}
-
-// consumerNetworkPolicyName is the name of the per-namespace consumer policy the
-// tests create to expose the Spark UI / Connect gRPC ports, mirroring the
-// namespace-enablement step a user performs by hand (alongside RBAC).
-const consumerNetworkPolicyName = "spark-operator-allow-consumers"
-
-// applyConsumerNetworkPolicy creates (idempotently) a least-privilege consumer
-// NetworkPolicy in namespace that admits the Spark UI (4040) and Spark Connect
-// gRPC (15002) ports on the driver / Connect-server pods from any pod in the
-// same namespace. The operator itself only ships intra-Spark + egress policies,
-// so exposing these consumer ports is a user/namespace responsibility - this
-// helper reproduces that step for the e2e flow. Selecting by label means it may
-// be created before the workload pods exist.
-func applyConsumerNetworkPolicy(ctx context.Context, namespace string) *networkingv1.NetworkPolicy {
-	tcp := corev1.ProtocolTCP
-	uiPort := intstr.FromInt(int(common.DefaultSparkWebUIPort))
-	grpcPort := intstr.FromInt(common.SparkConnectServerPort)
-	np := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: consumerNetworkPolicyName, Namespace: namespace},
-		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{
-				MatchExpressions: []metav1.LabelSelectorRequirement{{
-					Key:      common.LabelSparkRole,
-					Operator: metav1.LabelSelectorOpIn,
-					Values:   []string{common.SparkRoleDriver, common.SparkRoleConnectServer},
-				}},
-			},
-			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
-			Ingress: []networkingv1.NetworkPolicyIngressRule{{
-				From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
-				Ports: []networkingv1.NetworkPolicyPort{
-					{Protocol: &tcp, Port: &uiPort},
-					{Protocol: &tcp, Port: &grpcPort},
-				},
-			}},
-		},
-	}
-	existing := &networkingv1.NetworkPolicy{}
-	key := types.NamespacedName{Name: np.Name, Namespace: np.Namespace}
-	if err := k8sClient.Get(ctx, key, existing); err == nil {
-		return existing
-	}
-	Expect(k8sClient.Create(ctx, np)).To(Succeed())
-	return np
 }

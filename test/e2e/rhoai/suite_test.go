@@ -43,6 +43,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -274,6 +275,34 @@ var _ = BeforeSuite(func() {
 			}
 		}
 		Expect(k8sClient.Create(context.TODO(), srcRB)).NotTo(HaveOccurred())
+
+		// The RHOAI/ODH overlays enable operand NetworkPolicies, which leave
+		// operand pods default-deny for consumer ingress. Expose the Spark UI
+		// (4040) and Spark Connect gRPC (15002) to same-namespace consumers in the
+		// test namespace - the namespace-enablement step a user performs alongside
+		// RBAC. (Selecting by label means it works before the workload pods exist.)
+		By("Creating the consumer NetworkPolicy in the test namespace")
+		consumerNP := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "spark-operator-allow-consumers", Namespace: TestNamespace},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{
+					MatchExpressions: []metav1.LabelSelectorRequirement{{
+						Key:      "spark-role",
+						Operator: metav1.LabelSelectorOpIn,
+						Values:   []string{"driver", "connect-server"},
+					}},
+				},
+				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+				Ingress: []networkingv1.NetworkPolicyIngressRule{{
+					From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Port: ptr.To(intstr.FromInt(4040))},
+						{Port: ptr.To(intstr.FromInt(15002))},
+					},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(context.TODO(), consumerNP)).NotTo(HaveOccurred())
 	}
 })
 

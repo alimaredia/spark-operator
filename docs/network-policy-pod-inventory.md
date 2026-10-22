@@ -82,7 +82,7 @@ Common label constants (`pkg/common/spark.go`): `LabelLaunchedBySparkOperator`, 
 
 ## NetworkPolicy design — operand pods (implemented)
 
-The operator creates operand NetworkPolicies via `internal/controller/networkpolicy`, invoked from both the SparkApplication and SparkConnect reconcilers, **unconditionally** (no feature flag). It uses **three** policies rather than one blanket, specifically so it composes cleanly with Spark 4.2's own executor policy (see *Spark 4.2 interaction* below):
+The operator creates operand NetworkPolicies via `internal/controller/networkpolicy`, invoked from both the SparkApplication and SparkConnect reconcilers. It is gated on **`--enable-network-policy`** (Helm: `controller.networkPolicy.enable`), which **defaults to true** — set it to false to opt out. It uses **three** policies rather than one blanket, specifically so it composes cleanly with Spark 4.2's own executor policy (see *Spark 4.2 interaction* below):
 
 | Policy | Scope | Selects | Purpose |
 |--------|-------|---------|---------|
@@ -179,7 +179,13 @@ This satisfies "clean up when the last application is shut down" (ODH-ADR-Operat
 
 ### Packaging
 
-The policies are **created and maintained by the operator at runtime** (not static manifests), via `internal/controller/networkpolicy`, **unconditionally** (no feature flag). The controller RBAC grants `networkpolicies` (get/list/watch/create/update/patch/delete) in both `config/rbac/role.yaml` and the Helm chart. Contrast with the **operator-pod** policies below, which are static overlay manifests.
+The policies are **created and maintained by the operator at runtime** (not static manifests), via `internal/controller/networkpolicy`, gated on **`--enable-network-policy`** (Helm: `controller.networkPolicy.enable`, default **true**). The controller RBAC grants `networkpolicies` (get/list/watch/create/update/patch/delete) in both `config/rbac/role.yaml` and the Helm chart. Contrast with the **operator-pod** policies below, which are static overlay manifests.
+
+**Opting out / rollback.** Set `--enable-network-policy=false` (or `controller.networkPolicy.enable=false`) to stop the operator creating these policies. Like the driver-PDB gate, **disabling is a no-op for policies that already exist** — they carry owner references to live workloads, so they persist until each workload is deleted (then kube GC removes them). To roll back immediately, disable the flag **and** delete the existing policies, e.g.:
+
+```bash
+kubectl delete networkpolicy -A -l sparkoperator.k8s.io/created-by-spark-operator=true
+```
 
 ### Extending the policies (bring-your-own)
 

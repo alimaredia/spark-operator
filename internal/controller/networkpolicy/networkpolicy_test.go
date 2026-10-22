@@ -33,6 +33,7 @@ import (
 	"github.com/kubeflow/spark-operator/v2/api/v1alpha1"
 	"github.com/kubeflow/spark-operator/v2/api/v1beta2"
 	"github.com/kubeflow/spark-operator/v2/pkg/common"
+	"github.com/kubeflow/spark-operator/v2/pkg/features"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -139,6 +140,7 @@ func TestExecutorIngressSpecMatchesSparkFeatureStep(t *testing.T) {
 }
 
 func TestEnsureForSparkApplicationCreatesPoliciesAndAccumulatesOwners(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.OperandNetworkPolicy, true)
 	scheme := newScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
@@ -173,6 +175,7 @@ func TestEnsureForSparkApplicationCreatesPoliciesAndAccumulatesOwners(t *testing
 }
 
 func TestEnsureForSparkApplicationSkipsExecutorPolicyWithoutAppID(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.OperandNetworkPolicy, true)
 	scheme := newScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
@@ -190,6 +193,7 @@ func TestEnsureForSparkApplicationSkipsExecutorPolicyWithoutAppID(t *testing.T) 
 }
 
 func TestEnsureForSparkConnectCreatesPolicies(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.OperandNetworkPolicy, true)
 	scheme := newScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
@@ -233,6 +237,7 @@ func failingCreateClient(t *testing.T, scheme *runtime.Scheme) client.Client {
 }
 
 func TestEnsureForSparkApplicationReturnsErrorOnFailure(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.OperandNetworkPolicy, true)
 	scheme := newScheme(t)
 	c := failingCreateClient(t, scheme)
 	if err := EnsureForSparkApplication(context.Background(), c, scheme, app("app1", "uid-1"), "spark-app1"); err == nil {
@@ -241,9 +246,33 @@ func TestEnsureForSparkApplicationReturnsErrorOnFailure(t *testing.T) {
 }
 
 func TestEnsureForSparkConnectReturnsErrorOnFailure(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.OperandNetworkPolicy, true)
 	scheme := newScheme(t)
 	c := failingCreateClient(t, scheme)
 	if err := EnsureForSparkConnect(context.Background(), c, scheme, conn("conn1", "uid-1")); err == nil {
 		t.Fatal("expected an error when policy creation fails")
+	}
+}
+
+// TestEnsureNoOpWhenGateDisabled verifies the feature gate (off by default)
+// makes the Ensure functions no-ops that create nothing.
+func TestEnsureNoOpWhenGateDisabled(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.OperandNetworkPolicy, false)
+	scheme := newScheme(t)
+	ctx := context.Background()
+
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	if err := EnsureForSparkApplication(ctx, c, scheme, app("app1", "uid-1"), "spark-app1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureForSparkConnect(ctx, c, scheme, conn("conn1", "uid-1")); err != nil {
+		t.Fatal(err)
+	}
+	nps := &networkingv1.NetworkPolicyList{}
+	if err := c.List(ctx, nps); err != nil {
+		t.Fatal(err)
+	}
+	if len(nps.Items) != 0 {
+		t.Fatalf("expected no NetworkPolicies when the gate is disabled, got %d", len(nps.Items))
 	}
 }

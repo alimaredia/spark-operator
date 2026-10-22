@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/kubeflow/spark-operator/v2/pkg/common"
+	"github.com/kubeflow/spark-operator/v2/pkg/features"
 )
 
 const (
@@ -68,6 +69,9 @@ const (
 // SparkApplications created by a ScheduledSparkApplication too, since those
 // reconcile through the SparkApplication controller.
 func EnsureForSparkApplication(ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object, appID string) error {
+	if !features.Enabled(features.OperandNetworkPolicy) {
+		return nil
+	}
 	if err := ensureSharedPolicies(ctx, c, scheme, owner); err != nil {
 		return err
 	}
@@ -84,6 +88,9 @@ func EnsureForSparkApplication(ctx context.Context, c client.Client, scheme *run
 // (connect-name selects the same pod set as the server's spark-app-selector, so
 // it is equivalent to SPARK-55653 for the Connect app and does not widen it.)
 func EnsureForSparkConnect(ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object) error {
+	if !features.Enabled(features.OperandNetworkPolicy) {
+		return nil
+	}
 	if err := ensureSharedPolicies(ctx, c, scheme, owner); err != nil {
 		return err
 	}

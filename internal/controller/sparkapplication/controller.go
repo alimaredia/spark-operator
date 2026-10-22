@@ -131,7 +131,6 @@ func NewReconciler(
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;update;patch
 // +kubebuilder:rbac:groups=extensions,resources=ingresses,verbs=get;create;update;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;create;update;delete
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=sparkoperator.k8s.io,resources=sparkapplications/status,verbs=update
@@ -532,11 +531,8 @@ func (r *Reconciler) reconcileRunningSparkApplication(ctx context.Context, req c
 				return fmt.Errorf("failed to ensure driver PDB: %v", err)
 			}
 
-			// Ensure the operand NetworkPolicies (shared egress + driver ingress
-			// blanket + per-app executor ingress). Idempotent; the policies are
-			// owner-referenced to the app so kube GC removes them once the last owner
-			// in the namespace is gone. Consumer ingress (UI/metrics/gRPC) is left to
-			// a user-managed additive policy.
+			// Ensure the operand NetworkPolicies (gated on the OperandNetworkPolicy
+			// feature gate, off by default). No-op when the gate is disabled.
 			if err := networkpolicy.EnsureForSparkApplication(ctx, r.client, r.scheme, app, app.Status.SparkApplicationID); err != nil {
 				return fmt.Errorf("failed to ensure operand network policies: %v", err)
 			}
