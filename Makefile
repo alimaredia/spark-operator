@@ -355,10 +355,25 @@ kind-load-image: kind-create-cluster docker-build ## Load the image into the kin
 # the canonical example. Override on the command line if you need a different one.
 SPARK_IMAGE ?= docker.io/apache/spark:4.0.4@sha256:7112c0c0ca07b7d2605163ba91a05e53af39ba7cfcf9886e63141ade3f850456
 
+# SPARK_IMAGE_PLATFORM is the single platform loaded into the kind cluster. The
+# nodes only ever run the host architecture, so there is nothing to gain from
+# carrying the others.
+SPARK_IMAGE_PLATFORM ?= linux/$(shell go env GOARCH)
+SPARK_IMAGE_ARCHIVE ?= $(LOCALBIN)/spark-image.tar
+
 .PHONY: kind-load-spark-image
 kind-load-spark-image: kind-create-cluster ## Pull the Spark runtime image and load it into the kind cluster.
-	docker image inspect $(SPARK_IMAGE) >/dev/null 2>&1 || docker pull $(SPARK_IMAGE)
-	$(KIND) load docker-image --name $(KIND_CLUSTER_NAME) $(SPARK_IMAGE)
+	docker image inspect $(SPARK_IMAGE) >/dev/null 2>&1 || docker pull --platform $(SPARK_IMAGE_PLATFORM) $(SPARK_IMAGE)
+	@# `kind load docker-image` pipes `docker save` into `ctr images import
+	@# --all-platforms`. SPARK_IMAGE is pinned to a multi-platform digest, and
+	@# with Docker's containerd image store `docker save` exports the whole OCI
+	@# index - including the manifests for platforms that were never pulled - so
+	@# ctr fails with "content digest <other arch>: not found". Export a
+	@# single-platform archive and load that instead.
+	@mkdir -p $(LOCALBIN)
+	docker save --platform $(SPARK_IMAGE_PLATFORM) -o $(SPARK_IMAGE_ARCHIVE) $(SPARK_IMAGE)
+	$(KIND) load image-archive --name $(KIND_CLUSTER_NAME) $(SPARK_IMAGE_ARCHIVE)
+	rm -f $(SPARK_IMAGE_ARCHIVE)
 
 .PHONY: kind-delete-cluster
 kind-delete-cluster: kind ## Delete the created kind cluster.
